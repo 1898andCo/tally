@@ -1,0 +1,21 @@
+name: Typos
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  typos:
+    name: Check Typos
+    runs-on: [self-hosted, Ubuntu, Common]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: crate-ci/typos@v1

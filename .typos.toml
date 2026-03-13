@@ -1,0 +1,10 @@
+[default.extend-words]
+jsonl = "jsonl"
+rmcp = "rmcp"
+sarif = "sarif"
+
+[files]
+extend-exclude = [
+  ".claude/",
+  "target/",
+]

@@ -1,0 +1,19 @@
+glob_matcher: doublestar
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt-check:
+      glob: "**/*.rs"
+      run: test -f "$HOME/.cargo/env" && . "$HOME/.cargo/env"; cargo +nightly fmt --all -- --check
+    clippy:
+      glob: "**/*.rs"
+      run: test -f "$HOME/.cargo/env" && . "$HOME/.cargo/env"; cargo clippy --all-targets --all-features -- -D warnings
+    taplo:
+      glob: "**/*.toml"
+      run: test -f "$HOME/.cargo/env" && . "$HOME/.cargo/env"; taplo fmt --check
+    test:
+      glob: "**/*.rs"
+      run: test -f "$HOME/.cargo/env" && . "$HOME/.cargo/env"; cargo test
+    typos:
+      run: test -f "$HOME/.cargo/env" && . "$HOME/.cargo/env"; typos

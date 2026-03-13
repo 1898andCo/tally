@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "tally": {
+      "command": "tally",
+      "args": ["mcp-server"],
+      "env": {
+        "RUST_LOG": "info"
+      }
+    }
+  }
+}
