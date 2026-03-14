@@ -1,0 +1,142 @@
+//! CLI interface for tally — clap-based subcommands.
+
+pub mod handlers;
+
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// tally — git-backed findings tracker for AI coding agents.
+#[derive(Parser)]
+#[command(name = "tally", version, about)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Subcommand)]
+pub enum Command {
+    /// Initialize the findings-data branch in the current repo.
+    Init,
+
+    /// Record a new finding (or deduplicate with existing).
+    Record {
+        /// File path where the finding was discovered.
+        #[arg(long)]
+        file: String,
+
+        /// Line number (start).
+        #[arg(long)]
+        line: u32,
+
+        /// Line number (end). Defaults to same as --line.
+        #[arg(long)]
+        line_end: Option<u32>,
+
+        /// Severity: critical, important, suggestion, tech-debt.
+        #[arg(long)]
+        severity: String,
+
+        /// Short title of the finding.
+        #[arg(long)]
+        title: String,
+
+        /// Rule ID for grouping (e.g., "unsafe-unwrap", "sql-injection").
+        #[arg(long)]
+        rule: String,
+
+        /// Detailed description.
+        #[arg(long, default_value = "")]
+        description: String,
+
+        /// Comma-separated tags.
+        #[arg(long, default_value = "")]
+        tags: String,
+
+        /// Agent identifier (e.g., "claude-code", "cursor").
+        #[arg(long, default_value = "cli")]
+        agent: String,
+
+        /// Session identifier.
+        #[arg(long, default_value = "")]
+        session: String,
+    },
+
+    /// Query findings with filters.
+    Query {
+        /// Filter by status (e.g., "open", "resolved").
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Filter by severity (e.g., "critical", "important").
+        #[arg(long)]
+        severity: Option<String>,
+
+        /// Filter by file path (substring match).
+        #[arg(long)]
+        file: Option<String>,
+
+        /// Filter by rule ID.
+        #[arg(long)]
+        rule: Option<String>,
+
+        /// Output format.
+        #[arg(long, value_enum, default_value = "json")]
+        format: OutputFormat,
+
+        /// Max results.
+        #[arg(long, default_value = "100")]
+        limit: usize,
+    },
+
+    /// Update a finding's lifecycle status.
+    Update {
+        /// Finding UUID (or session short ID like C1, I2).
+        id: String,
+
+        /// Target status.
+        #[arg(long)]
+        status: String,
+
+        /// Reason for the transition.
+        #[arg(long)]
+        reason: Option<String>,
+
+        /// Commit SHA that fixed the finding.
+        #[arg(long)]
+        commit: Option<String>,
+
+        /// Agent performing the update.
+        #[arg(long, default_value = "cli")]
+        agent: String,
+    },
+
+    /// Suppress a finding.
+    Suppress {
+        /// Finding UUID (or session short ID).
+        id: String,
+
+        /// Reason for suppression.
+        #[arg(long)]
+        reason: String,
+
+        /// Expiry date (ISO 8601). Omit for permanent suppression.
+        #[arg(long)]
+        expires: Option<String>,
+
+        /// Agent performing the suppression.
+        #[arg(long, default_value = "cli")]
+        agent: String,
+    },
+
+    /// Show summary statistics.
+    Stats,
+
+    /// Run as MCP server over stdio.
+    McpServer,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum OutputFormat {
+    Json,
+    Table,
+    Summary,
+}
