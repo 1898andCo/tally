@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-03-14
+
+### CI/CD
+
+- *(release)* Sync main branch on non-prerelease tags
+
+### Features
+
+- *(mcp)* Expose all Finding fields in MCP tools (#5)
+
 ## [0.2.0] - 2026-03-14
 
 ### Bug Fixes
