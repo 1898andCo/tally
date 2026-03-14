@@ -110,6 +110,7 @@ fn run(cli: Cli) -> tally_ng::error::Result<()> {
             file,
             rule,
             related_to,
+            tag,
             format,
             limit,
         } => cli::handle_query(
@@ -119,6 +120,7 @@ fn run(cli: Cli) -> tally_ng::error::Result<()> {
             file.as_deref(),
             rule.as_deref(),
             related_to.as_deref(),
+            tag.as_deref(),
             format,
             limit,
         ),
@@ -177,6 +179,37 @@ fn run(cli: Cli) -> tally_ng::error::Result<()> {
             clap_complete::generate(shell, &mut Cli::command(), "tally", &mut std::io::stdout());
             Ok(())
         }
+        Command::UpdateFields {
+            id,
+            title,
+            description,
+            suggested_fix,
+            evidence,
+            severity,
+            category,
+            tags,
+            agent,
+            format,
+        } => cli::handle_update_fields(
+            &store()?,
+            &id,
+            title.as_deref(),
+            description.as_deref(),
+            suggested_fix.as_deref(),
+            evidence.as_deref(),
+            severity.as_deref(),
+            category.as_deref(),
+            tags.as_deref(),
+            &agent,
+            format,
+        ),
+        Command::AddNote { id, text, agent } => cli::handle_add_note(&store()?, &id, &text, &agent),
+        Command::ManageTags {
+            id,
+            add,
+            remove,
+            agent,
+        } => cli::handle_manage_tags(&store()?, &id, &add, &remove, &agent),
         Command::McpCapabilities => {
             cli::handle_mcp_capabilities();
             Ok(())

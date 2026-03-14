@@ -26,6 +26,7 @@ pub fn handle_query(
     file_filter: Option<&str>,
     rule_filter: Option<&str>,
     related_to_filter: Option<&str>,
+    tag_filter: Option<&str>,
     format: OutputFormat,
     limit: usize,
 ) -> Result<()> {
@@ -58,6 +59,9 @@ pub fn handle_query(
                     .any(|r| r.related_finding_id == related_uuid)
             });
         }
+    }
+    if let Some(tag) = tag_filter {
+        findings.retain(|f| f.tags.iter().any(|t| t.contains(tag)));
     }
 
     findings.truncate(limit);

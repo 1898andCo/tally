@@ -6,26 +6,32 @@ mod common;
 mod export;
 mod import;
 mod init;
+mod note;
 mod query;
 mod rebuild_index;
 mod record;
 mod stats;
 mod suppress;
 mod sync_cmd;
+mod tag;
 mod update;
+mod update_fields;
 
 pub use batch::handle_record_batch;
 pub use capabilities::handle_mcp_capabilities;
 pub use export::{export_csv, export_sarif, handle_export};
 pub use import::handle_import;
 pub use init::handle_init;
+pub use note::handle_add_note;
 pub use query::handle_query;
 pub use rebuild_index::handle_rebuild_index;
 pub use record::{RecordArgs, handle_record};
 pub use stats::handle_stats;
 pub use suppress::handle_suppress;
 pub use sync_cmd::handle_sync;
+pub use tag::handle_manage_tags;
 pub use update::{UpdateArgs, handle_update};
+pub use update_fields::handle_update_fields;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -141,6 +147,10 @@ pub enum Command {
         #[arg(long)]
         related_to: Option<String>,
 
+        /// Filter by tag (substring match against finding's tags).
+        #[arg(long)]
+        tag: Option<String>,
+
         /// Output format.
         #[arg(long, value_enum, default_value = "json")]
         format: OutputFormat,
@@ -255,6 +265,81 @@ pub enum Command {
         /// Shell to generate completions for.
         #[arg(value_enum)]
         shell: clap_complete::Shell,
+    },
+
+    /// Edit mutable fields on a finding (title, description, suggested_fix, evidence, severity, category, tags). Identity fields (uuid, fingerprint, rule_id) are immutable.
+    UpdateFields {
+        /// Finding UUID (or session short ID like C1, I2).
+        id: String,
+
+        /// New title.
+        #[arg(long)]
+        title: Option<String>,
+
+        /// New description.
+        #[arg(long)]
+        description: Option<String>,
+
+        /// New suggested fix.
+        #[arg(long)]
+        suggested_fix: Option<String>,
+
+        /// New evidence.
+        #[arg(long)]
+        evidence: Option<String>,
+
+        /// New severity (critical, important, suggestion, tech_debt).
+        #[arg(long)]
+        severity: Option<String>,
+
+        /// New category.
+        #[arg(long)]
+        category: Option<String>,
+
+        /// Replace tags (comma-separated).
+        #[arg(long)]
+        tags: Option<String>,
+
+        /// Agent performing the edit.
+        #[arg(long, default_value = "cli")]
+        agent: String,
+
+        /// Output format.
+        #[arg(long, value_enum, default_value = "json")]
+        format: OutputFormat,
+    },
+
+    /// Add a timestamped note to a finding without changing its status.
+    #[command(name = "note")]
+    AddNote {
+        /// Finding UUID (or session short ID like C1, I2).
+        id: String,
+
+        /// Note text.
+        text: String,
+
+        /// Agent adding the note.
+        #[arg(long, default_value = "cli")]
+        agent: String,
+    },
+
+    /// Add or remove tags on a finding.
+    #[command(name = "tag")]
+    ManageTags {
+        /// Finding UUID (or session short ID like C1, I2).
+        id: String,
+
+        /// Tags to add (repeatable).
+        #[arg(long = "add")]
+        add: Vec<String>,
+
+        /// Tags to remove (repeatable).
+        #[arg(long = "remove")]
+        remove: Vec<String>,
+
+        /// Agent performing the change.
+        #[arg(long, default_value = "cli")]
+        agent: String,
     },
 
     /// List available MCP capabilities (tools, resources, prompts) with descriptions and arguments.
