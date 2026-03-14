@@ -59,6 +59,12 @@ fn make_record_input(
         suggested_fix: None,
         evidence: None,
         locations: None,
+        category: None,
+        tags: None,
+        pr_number: None,
+        session_id: None,
+        related_to: None,
+        relationship_type: None,
     }
 }
 
@@ -177,6 +183,12 @@ async fn mcp_unit_record_with_locations() {
                 role: Some("context".into()),
             },
         ]),
+        category: None,
+        tags: None,
+        pr_number: None,
+        session_id: None,
+        related_to: None,
+        relationship_type: None,
     };
     let result = server
         .record_finding(Parameters(input))
@@ -201,6 +213,12 @@ async fn mcp_unit_record_with_suggested_fix_and_evidence() {
         suggested_fix: Some("replace unwrap() with ?".into()),
         evidence: Some("line 10: x.unwrap()".into()),
         locations: None,
+        category: None,
+        tags: None,
+        pr_number: None,
+        session_id: None,
+        related_to: None,
+        relationship_type: None,
     };
     let result = server
         .record_finding(Parameters(input))
@@ -410,6 +428,9 @@ async fn mcp_unit_update_valid_transition() {
         new_status: "in_progress".into(),
         reason: Some("fixing now".into()),
         agent: Some("claude-code".into()),
+        commit_sha: None,
+        related_to: None,
+        relationship: None,
     };
     let result = server
         .update_finding_status(Parameters(input))
@@ -439,6 +460,9 @@ async fn mcp_unit_update_invalid_transition() {
         new_status: "closed".into(),
         reason: None,
         agent: None,
+        commit_sha: None,
+        related_to: None,
+        relationship: None,
     };
     let err = server
         .update_finding_status(Parameters(input))
@@ -467,6 +491,9 @@ async fn mcp_unit_update_with_short_id() {
         new_status: "acknowledged".into(),
         reason: None,
         agent: None,
+        commit_sha: None,
+        related_to: None,
+        relationship: None,
     };
     let result = server
         .update_finding_status(Parameters(input))
@@ -485,6 +512,9 @@ async fn mcp_unit_update_invalid_id() {
         new_status: "acknowledged".into(),
         reason: None,
         agent: None,
+        commit_sha: None,
+        related_to: None,
+        relationship: None,
     };
     let err = server
         .update_finding_status(Parameters(input))
@@ -595,6 +625,8 @@ async fn mcp_unit_suppress() {
         reason: "accepted risk".into(),
         expires_at: None,
         agent: None,
+        suppression_type: None,
+        suppression_pattern: None,
     };
     let result = server
         .suppress_finding(Parameters(input))
@@ -624,6 +656,8 @@ async fn mcp_unit_suppress_with_expiry() {
         reason: "temporary".into(),
         expires_at: Some("2030-12-31T23:59:59Z".into()),
         agent: Some("claude-code".into()),
+        suppression_type: None,
+        suppression_pattern: None,
     };
     let result = server
         .suppress_finding(Parameters(input))
@@ -654,6 +688,8 @@ async fn mcp_unit_suppress_invalid_date() {
         reason: "test".into(),
         expires_at: Some("not-a-date".into()),
         agent: None,
+        suppression_type: None,
+        suppression_pattern: None,
     };
     let err = server
         .suppress_finding(Parameters(input))
@@ -687,6 +723,9 @@ async fn mcp_unit_suppress_from_invalid_state() {
             new_status: "in_progress".into(),
             reason: None,
             agent: None,
+            commit_sha: None,
+            related_to: None,
+            relationship: None,
         }))
         .await
         .expect("to in_progress");
@@ -696,6 +735,9 @@ async fn mcp_unit_suppress_from_invalid_state() {
             new_status: "resolved".into(),
             reason: None,
             agent: None,
+            commit_sha: None,
+            related_to: None,
+            relationship: None,
         }))
         .await
         .expect("to resolved");
@@ -705,6 +747,9 @@ async fn mcp_unit_suppress_from_invalid_state() {
             new_status: "closed".into(),
             reason: None,
             agent: None,
+            commit_sha: None,
+            related_to: None,
+            relationship: None,
         }))
         .await
         .expect("to closed");
@@ -716,6 +761,8 @@ async fn mcp_unit_suppress_from_invalid_state() {
             reason: "test".into(),
             expires_at: None,
             agent: None,
+            suppression_type: None,
+            suppression_pattern: None,
         }))
         .await
         .expect_err("should fail");
@@ -745,6 +792,10 @@ async fn mcp_unit_batch_all_succeed() {
                 description: None,
                 suggested_fix: None,
                 evidence: None,
+                category: None,
+                tags: None,
+                pr_number: None,
+                session_id: None,
             },
             BatchFindingInput {
                 file_path: "b.rs".into(),
@@ -756,9 +807,15 @@ async fn mcp_unit_batch_all_succeed() {
                 description: Some("desc".into()),
                 suggested_fix: None,
                 evidence: None,
+                category: None,
+                tags: None,
+                pr_number: None,
+                session_id: None,
             },
         ],
         agent: Some("test-agent".into()),
+        pr_number: None,
+        session_id: None,
     };
     let result = server.record_batch(Parameters(input)).await.expect("batch");
     let json = extract_tool_json(&result);
@@ -783,6 +840,10 @@ async fn mcp_unit_batch_partial_failure() {
                 description: None,
                 suggested_fix: None,
                 evidence: None,
+                category: None,
+                tags: None,
+                pr_number: None,
+                session_id: None,
             },
             BatchFindingInput {
                 file_path: "b.rs".into(),
@@ -794,9 +855,15 @@ async fn mcp_unit_batch_partial_failure() {
                 description: None,
                 suggested_fix: None,
                 evidence: None,
+                category: None,
+                tags: None,
+                pr_number: None,
+                session_id: None,
             },
         ],
         agent: None,
+        pr_number: None,
+        session_id: None,
     };
     let result = server.record_batch(Parameters(input)).await.expect("batch");
     let json = extract_tool_json(&result);
@@ -829,8 +896,14 @@ async fn mcp_unit_batch_dedup() {
             description: None,
             suggested_fix: None,
             evidence: None,
+            category: None,
+            tags: None,
+            pr_number: None,
+            session_id: None,
         }],
         agent: None,
+        pr_number: None,
+        session_id: None,
     };
     let result = server.record_batch(Parameters(input)).await.expect("batch");
     let json = extract_tool_json(&result);
@@ -1051,6 +1124,9 @@ async fn mcp_unit_resource_by_status() {
             new_status: "in_progress".into(),
             reason: None,
             agent: None,
+            commit_sha: None,
+            related_to: None,
+            relationship: None,
         }))
         .await
         .expect("update");

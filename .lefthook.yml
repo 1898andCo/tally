@@ -5,7 +5,7 @@ pre-commit:
   commands:
     fmt-check:
       glob: "**/*.rs"
-      run: test -f "$HOME/.cargo/env" && . "$HOME/.cargo/env"; cargo +nightly fmt --all -- --check
+      run: test -f "$HOME/.cargo/env" && . "$HOME/.cargo/env"; rustup run nightly cargo fmt --all -- --check
     clippy:
       glob: "**/*.rs"
       run: test -f "$HOME/.cargo/env" && . "$HOME/.cargo/env"; cargo clippy --all-targets --all-features -- -D warnings
