@@ -1,6 +1,31 @@
 //! CLI interface for tally — clap-based subcommands.
 
-pub mod handlers;
+mod batch;
+mod capabilities;
+mod common;
+mod export;
+mod import;
+mod init;
+mod query;
+mod rebuild_index;
+mod record;
+mod stats;
+mod suppress;
+mod sync_cmd;
+mod update;
+
+pub use batch::handle_record_batch;
+pub use capabilities::handle_mcp_capabilities;
+pub use export::{export_csv, export_sarif, handle_export};
+pub use import::handle_import;
+pub use init::handle_init;
+pub use query::handle_query;
+pub use rebuild_index::handle_rebuild_index;
+pub use record::{RecordArgs, handle_record};
+pub use stats::handle_stats;
+pub use suppress::handle_suppress;
+pub use sync_cmd::handle_sync;
+pub use update::{UpdateArgs, handle_update};
 
 use clap::{Parser, Subcommand, ValueEnum};
 

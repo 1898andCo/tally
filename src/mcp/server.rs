@@ -766,8 +766,8 @@ impl TallyMcpServer {
 
         let content = match input.format.to_ascii_lowercase().as_str() {
             "json" => serde_json::to_string_pretty(&findings).unwrap_or_default(),
-            "csv" => crate::cli::handlers::export_csv(&findings),
-            "sarif" => crate::cli::handlers::export_sarif(&findings),
+            "csv" => crate::cli::export_csv(&findings),
+            "sarif" => crate::cli::export_sarif(&findings),
             other => {
                 return Err(McpError {
                     code: ErrorCode::INVALID_REQUEST,
