@@ -3,3 +3,10 @@
 //!
 //! Provides persistent, content-addressable finding identity across
 //! sessions, agents, PRs, and branches with full lifecycle tracking.
+
+pub mod cli;
+pub mod error;
+pub mod mcp;
+pub mod model;
+pub mod session;
+pub mod storage;

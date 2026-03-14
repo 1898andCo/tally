@@ -16,7 +16,7 @@ permissions:
 jobs:
   detect:
     name: Detect Changes
-    runs-on: [self-hosted, Ubuntu, Common]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       doc_only: ${{ steps.check.outputs.doc_only }}
@@ -44,7 +44,7 @@ jobs:
     name: Rustfmt
     needs: detect
     if: needs.detect.outputs.doc_only == 'true'
-    runs-on: [self-hosted, Ubuntu, Common]
+    runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - run: echo "Skipped — doc-only change"
@@ -53,7 +53,7 @@ jobs:
     name: Clippy
     needs: detect
     if: needs.detect.outputs.doc_only == 'true'
-    runs-on: [self-hosted, Ubuntu, Common]
+    runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - run: echo "Skipped — doc-only change"
@@ -62,7 +62,7 @@ jobs:
     name: Build
     needs: detect
     if: needs.detect.outputs.doc_only == 'true'
-    runs-on: [self-hosted, Ubuntu, Common]
+    runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - run: echo "Skipped — doc-only change"
@@ -71,7 +71,7 @@ jobs:
     name: Test
     needs: detect
     if: needs.detect.outputs.doc_only == 'true'
-    runs-on: [self-hosted, Ubuntu, Common]
+    runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - run: echo "Skipped — doc-only change"
@@ -80,7 +80,7 @@ jobs:
     name: Cargo Deny
     needs: detect
     if: needs.detect.outputs.doc_only == 'true'
-    runs-on: [self-hosted, Ubuntu, Common]
+    runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - run: echo "Skipped — doc-only change"

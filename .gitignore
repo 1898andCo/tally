@@ -5,3 +5,6 @@
 *~
 .idea/
 .vscode/
+codecov.json
+coverage-summary.txt
+lcov.info

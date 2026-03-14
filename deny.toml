@@ -1,5 +1,9 @@
 [advisories]
-ignore = []
+ignore = [
+  # paste crate flagged as unmaintained (RUSTSEC-2024-0436) — transitive dep via rmcp/schemars.
+  # No action needed: paste is feature-complete (proc macro for token pasting), widely used, no CVE.
+  "RUSTSEC-2024-0436",
+]
 yanked = "warn"
 
 [licenses]
