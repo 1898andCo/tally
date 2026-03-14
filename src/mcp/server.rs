@@ -34,112 +34,143 @@ pub struct TallyMcpServer {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RecordFindingInput {
-    #[schemars(description = "File path where the finding was discovered")]
+    #[schemars(description = "Relative file path from repo root (e.g., src/main.rs)")]
     pub file_path: String,
-    #[schemars(description = "Start line number")]
+    #[schemars(description = "Start line number (1-based)")]
     pub line_start: u32,
-    #[schemars(description = "End line number (defaults to line_start)")]
+    #[schemars(description = "End line number (defaults to line_start for single-line findings)")]
     pub line_end: Option<u32>,
-    #[schemars(description = "Severity: critical, important, suggestion, tech_debt")]
+    #[schemars(description = "Severity level. One of: critical, important, suggestion, tech_debt")]
     pub severity: String,
-    #[schemars(description = "Short title of the finding")]
+    #[schemars(description = "Concise title summarizing the issue (e.g., 'unwrap on user input')")]
     pub title: String,
-    #[schemars(description = "Rule ID for grouping (e.g., unsafe-unwrap)")]
+    #[schemars(
+        description = "Rule identifier for grouping related findings (e.g., unsafe-unwrap, sql-injection, missing-test)"
+    )]
     pub rule_id: String,
-    #[schemars(description = "Detailed description")]
+    #[schemars(description = "Detailed explanation of the issue and why it matters")]
     pub description: Option<String>,
-    #[schemars(description = "Agent identifier (e.g., claude-code)")]
+    #[schemars(
+        description = "Your agent identifier for provenance tracking (e.g., claude-code, cursor)"
+    )]
     pub agent: Option<String>,
     #[schemars(
-        description = "Additional locations (array of {file_path, line_start, line_end, role})"
+        description = "Additional locations for cross-file findings. Each has file_path, line_start, optional line_end, and role (secondary or context). The primary location is set by the top-level file_path/line_start."
     )]
     pub locations: Option<Vec<LocationInput>>,
-    #[schemars(description = "Suggested fix or remediation")]
+    #[schemars(description = "Recommended fix or remediation steps")]
     pub suggested_fix: Option<String>,
-    #[schemars(description = "Evidence or code snippet supporting the finding")]
+    #[schemars(description = "Evidence supporting the finding (e.g., code snippet, stack trace)")]
     pub evidence: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct LocationInput {
+    #[schemars(description = "Relative file path from repo root")]
     pub file_path: String,
+    #[schemars(description = "Start line number (1-based)")]
     pub line_start: u32,
+    #[schemars(description = "End line number (defaults to line_start)")]
     pub line_end: Option<u32>,
-    #[schemars(description = "primary, secondary, or context")]
+    #[schemars(
+        description = "Location role: 'secondary' for supporting evidence, 'context' for additional context. Defaults to 'secondary'."
+    )]
     pub role: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryFindingsInput {
-    #[schemars(description = "Filter by status (e.g., open, resolved)")]
+    #[schemars(
+        description = "Filter by lifecycle status. One of: open, acknowledged, in_progress, resolved, false_positive, wont_fix, deferred, suppressed, reopened, closed"
+    )]
     pub status: Option<String>,
-    #[schemars(description = "Filter by severity (e.g., critical, important)")]
+    #[schemars(
+        description = "Filter by severity level. One of: critical, important, suggestion, tech_debt"
+    )]
     pub severity: Option<String>,
-    #[schemars(description = "Filter by file path (substring match)")]
+    #[schemars(
+        description = "Filter by file path substring match (e.g., 'src/api' matches src/api/handler.rs)"
+    )]
     pub file: Option<String>,
-    #[schemars(description = "Filter by rule ID")]
+    #[schemars(description = "Filter by rule ID (exact match, e.g., unsafe-unwrap)")]
     pub rule: Option<String>,
-    #[schemars(description = "Max results (default 100)")]
+    #[schemars(description = "Maximum number of results to return (default: 100)")]
     pub limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateStatusInput {
-    #[schemars(description = "Finding UUID")]
+    #[schemars(
+        description = "Finding identifier — either a full UUID or a session short ID (e.g., C1, I2, S3, TD1)"
+    )]
     pub finding_id: String,
-    #[schemars(description = "Target status (e.g., in_progress, resolved)")]
+    #[schemars(
+        description = "Target lifecycle status. Valid transitions depend on current state: Open can go to acknowledged/in_progress/false_positive/deferred/suppressed. InProgress can go to resolved/wont_fix/deferred. Resolved can go to reopened/closed."
+    )]
     pub new_status: String,
-    #[schemars(description = "Reason for the transition")]
+    #[schemars(
+        description = "Reason for the status change (e.g., 'fixed in PR #42', 'accepted risk')"
+    )]
     pub reason: Option<String>,
-    #[schemars(description = "Agent performing the update")]
+    #[schemars(description = "Your agent identifier for audit trail (e.g., claude-code, cursor)")]
     pub agent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetContextInput {
-    #[schemars(description = "Finding UUID")]
+    #[schemars(
+        description = "Finding identifier — either a full UUID or a session short ID (e.g., C1, I2)"
+    )]
     pub finding_id: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SuppressFindingInput {
-    #[schemars(description = "Finding UUID")]
+    #[schemars(
+        description = "Finding identifier — either a full UUID or a session short ID (e.g., C1, I2)"
+    )]
     pub finding_id: String,
-    #[schemars(description = "Reason for suppression")]
+    #[schemars(
+        description = "Why this finding should be suppressed (e.g., 'accepted risk', 'false positive in test code')"
+    )]
     pub reason: String,
-    #[schemars(description = "Expiry date (ISO 8601). Omit for permanent.")]
+    #[schemars(
+        description = "ISO 8601 expiry date after which the finding auto-reopens (e.g., 2026-06-01T00:00:00Z). Omit for permanent suppression."
+    )]
     pub expires_at: Option<String>,
-    #[schemars(description = "Agent performing the suppression")]
+    #[schemars(description = "Your agent identifier for audit trail (e.g., claude-code, cursor)")]
     pub agent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RecordBatchInput {
-    #[schemars(description = "Array of findings to record")]
+    #[schemars(
+        description = "Array of findings to record. Each is processed independently — invalid entries don't block valid ones (partial success)."
+    )]
     pub findings: Vec<BatchFindingInput>,
-    #[schemars(description = "Agent identifier")]
+    #[schemars(description = "Your agent identifier applied to all findings in the batch")]
     pub agent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BatchFindingInput {
-    #[schemars(description = "File path")]
+    #[schemars(description = "Relative file path from repo root")]
     pub file_path: String,
-    #[schemars(description = "Start line number")]
+    #[schemars(description = "Start line number (1-based)")]
     pub line_start: u32,
-    #[schemars(description = "End line number")]
+    #[schemars(description = "End line number (defaults to line_start)")]
     pub line_end: Option<u32>,
-    #[schemars(description = "Severity: critical, important, suggestion, tech_debt")]
+    #[schemars(description = "Severity level. One of: critical, important, suggestion, tech_debt")]
     pub severity: String,
-    #[schemars(description = "Short title")]
+    #[schemars(description = "Concise title summarizing the issue")]
     pub title: String,
-    #[schemars(description = "Rule ID")]
+    #[schemars(description = "Rule identifier for grouping (e.g., unsafe-unwrap, sql-injection)")]
     pub rule_id: String,
-    #[schemars(description = "Description")]
+    #[schemars(description = "Detailed explanation of the issue")]
     pub description: Option<String>,
-    #[schemars(description = "Suggested fix or remediation")]
+    #[schemars(description = "Recommended fix or remediation steps")]
     pub suggested_fix: Option<String>,
-    #[schemars(description = "Evidence or code snippet supporting the finding")]
+    #[schemars(description = "Evidence supporting the finding (e.g., code snippet)")]
     pub evidence: Option<String>,
 }
 
@@ -186,7 +217,9 @@ impl TallyMcpServer {
         })
     }
 
-    #[tool(description = "Record a new finding or deduplicate with an existing one")]
+    #[tool(
+        description = "Record a code finding with stable identity. If the same file+line+rule was already recorded, returns the existing UUID (dedup). If a similar finding exists nearby (within 5 lines, same rule), creates a new finding linked as related. Returns JSON with status (created/deduplicated), uuid, and optional related_to/distance."
+    )]
     pub async fn record_finding(
         &self,
         params: Parameters<RecordFindingInput>,
@@ -310,7 +343,9 @@ impl TallyMcpServer {
         )]))
     }
 
-    #[tool(description = "Query findings with filters")]
+    #[tool(
+        description = "Search findings with optional filters. Returns a JSON array of matching findings. All filters are AND-combined. Omit all filters to get all findings. Empty result returns []. Each finding includes uuid, severity, status, title, locations, relationships, and full state_history."
+    )]
     pub async fn query_findings(
         &self,
         params: Parameters<QueryFindingsInput>,
@@ -346,7 +381,9 @@ impl TallyMcpServer {
         )]))
     }
 
-    #[tool(description = "Update a finding's lifecycle status")]
+    #[tool(
+        description = "Transition a finding's lifecycle status. Valid transitions: Open→acknowledged/in_progress/false_positive/deferred/suppressed, Acknowledged→in_progress/false_positive/wont_fix/deferred, InProgress→resolved/wont_fix/deferred, Resolved→reopened/closed, Reopened→acknowledged/in_progress. Closed is terminal. Invalid transitions return an error listing valid targets."
+    )]
     pub async fn update_finding_status(
         &self,
         params: Parameters<UpdateStatusInput>,
@@ -407,7 +444,9 @@ impl TallyMcpServer {
         )]))
     }
 
-    #[tool(description = "Get finding details with full context")]
+    #[tool(
+        description = "Retrieve a finding's complete details including all locations, state history, relationships, discovered_by agents, and suppression info. Accepts UUID or session short ID (C1, I2, etc.)."
+    )]
     pub async fn get_finding_context(
         &self,
         params: Parameters<GetContextInput>,
@@ -421,7 +460,9 @@ impl TallyMcpServer {
         )]))
     }
 
-    #[tool(description = "Record multiple findings in batch (partial success semantics)")]
+    #[tool(
+        description = "Record multiple findings at once. Uses partial success semantics — valid findings are recorded even if others fail. Returns JSON with total/succeeded/failed counts and per-item results. Duplicates are automatically deduplicated (not counted as failures)."
+    )]
     pub async fn record_batch(
         &self,
         params: Parameters<RecordBatchInput>,
@@ -464,7 +505,9 @@ impl TallyMcpServer {
         )]))
     }
 
-    #[tool(description = "Suppress a finding with reason and optional expiry")]
+    #[tool(
+        description = "Suppress a finding so it won't be re-reported. Optionally set an expiry date — after expiry, the finding auto-reopens on next query. Only works from Open status. Returns the finding's UUID and suppression status."
+    )]
     pub async fn suppress_finding(
         &self,
         params: Parameters<SuppressFindingInput>,
@@ -542,7 +585,7 @@ impl ServerHandler for TallyMcpServer {
                 icons: None,
                 website_url: None,
             },
-            instructions: Some("Git-backed findings tracker for AI coding agents. Tools: record_finding, record_batch, query_findings, update_finding_status, get_finding_context, suppress_finding. Resources: findings://summary, findings://file/{path}, findings://detail/{uuid}.".into()),
+            instructions: Some("tally — persistent findings tracker backed by git. Use record_finding when you discover an issue in code. Use query_findings to check existing findings before recording (avoids duplicates). Use update_finding_status to track progress (open→in_progress→resolved→closed). Findings persist across sessions with stable UUIDs. Short IDs (C1, I2, S3) are accepted anywhere a UUID is expected. Severity levels: critical, important, suggestion, tech_debt.".into()),
         }
     }
 
