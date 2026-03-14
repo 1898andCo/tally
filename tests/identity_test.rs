@@ -122,6 +122,7 @@ fn make_finding(uuid: Uuid, file: &str, line: u32, rule: &str) -> Finding {
     };
     let fp = compute_fingerprint(&loc, rule);
     Finding {
+        schema_version: "1.0.0".to_string(),
         uuid,
         content_fingerprint: fp,
         rule_id: rule.to_string(),
@@ -477,6 +478,7 @@ fn resolver_secondary_location_not_indexed() {
     };
     let fp = compute_fingerprint(&primary_loc, "unsafe-unwrap");
     let finding = Finding {
+        schema_version: "1.0.0".to_string(),
         uuid,
         content_fingerprint: fp,
         rule_id: "unsafe-unwrap".to_string(),

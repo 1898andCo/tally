@@ -185,11 +185,11 @@ impl GitFindingsStore {
                 Ok(content) => match serde_json::from_slice::<Finding>(&content) {
                     Ok(finding) => findings.push(finding),
                     Err(e) => {
-                        eprintln!("WARNING: skipping malformed finding {name}: {e}");
+                        tracing::warn!(name, error = %e, "Skipping malformed finding");
                     }
                 },
                 Err(e) => {
-                    eprintln!("WARNING: failed to read {name}: {e}");
+                    tracing::warn!(name, error = %e, "Failed to read finding");
                 }
             }
         }

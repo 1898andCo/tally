@@ -34,6 +34,7 @@ fn setup_repo() -> (tempfile::TempDir, String) {
 /// Create a test finding with the given UUID.
 fn make_test_finding(uuid: Uuid) -> Finding {
     Finding {
+        schema_version: "1.0.0".to_string(),
         uuid,
         content_fingerprint: format!("sha256:test_{uuid}"),
         rule_id: "test-rule".to_string(),

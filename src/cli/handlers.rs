@@ -8,7 +8,7 @@ use crate::error::{Result, TallyError};
 use crate::model::{
     AgentRecord, Finding, FindingIdentityResolver, FindingRelationship, IdentityResolution,
     LifecycleState, Location, LocationRole, RelationshipType, Severity, StateTransition,
-    Suppression, SuppressionType, compute_fingerprint,
+    Suppression, SuppressionType, compute_fingerprint, default_schema_version,
 };
 use crate::session::SessionIdMapper;
 use crate::storage::GitFindingsStore;
@@ -196,7 +196,7 @@ pub fn handle_update(store: &GitFindingsStore, args: &UpdateArgs<'_>) -> Result<
     let new_status: LifecycleState = args
         .status
         .parse()
-        .map_err(|e: String| TallyError::InvalidSeverity(e))?;
+        .map_err(|e: String| TallyError::InvalidInput(e))?;
 
     let mut finding = store.load_finding(&uuid)?;
 
@@ -273,7 +273,7 @@ pub fn handle_suppress(
     let expires_at = expires
         .map(|s| {
             s.parse::<chrono::DateTime<Utc>>()
-                .map_err(|e| TallyError::InvalidSeverity(format!("invalid date: {e}")))
+                .map_err(|e| TallyError::InvalidInput(format!("invalid date: {e}")))
         })
         .transpose()?;
 
@@ -442,9 +442,11 @@ pub fn handle_export(
 /// Returns error if remote operations fail.
 pub fn handle_sync(store: &GitFindingsStore, remote: &str) -> Result<()> {
     let result = store.sync(remote)?;
-    eprintln!(
-        "Sync complete: fetched={}, merged={}, pushed={}",
-        result.fetched, result.merged, result.pushed
+    tracing::info!(
+        fetched = result.fetched,
+        merged = result.merged,
+        pushed = result.pushed,
+        "Sync complete"
     );
     Ok(())
 }
@@ -486,11 +488,11 @@ pub fn handle_import(store: &GitFindingsStore, path: &str) -> Result<()> {
         match import_single_finding(entry, store) {
             Ok(uuid) => {
                 imported += 1;
-                eprintln!("  Imported: {uuid}");
+                tracing::info!(%uuid, "Imported finding");
             }
             Err(e) => {
                 skipped += 1;
-                eprintln!("  Skipped: {e}");
+                tracing::warn!(error = %e, "Skipped finding");
             }
         }
     }
@@ -564,7 +566,7 @@ fn parse_suppression_type(type_str: &str, pattern: Option<&str>) -> Result<Suppr
         "file" | "file_level" => Ok(SuppressionType::FileLevel),
         "inline" | "inline_comment" => {
             let p = pattern.ok_or_else(|| {
-                TallyError::InvalidSeverity(
+                TallyError::InvalidInput(
                     "inline suppression requires --suppression-pattern".to_string(),
                 )
             })?;
@@ -572,7 +574,7 @@ fn parse_suppression_type(type_str: &str, pattern: Option<&str>) -> Result<Suppr
                 pattern: p.to_string(),
             })
         }
-        other => Err(TallyError::InvalidSeverity(format!(
+        other => Err(TallyError::InvalidInput(format!(
             "invalid suppression type: '{other}' (valid: global, file, inline)"
         ))),
     }
@@ -657,6 +659,7 @@ fn create_finding(
     let new_uuid = Uuid::now_v7();
     let (repo_id, branch, commit_sha) = store.git_context();
     let finding = Finding {
+        schema_version: default_schema_version(),
         uuid: new_uuid,
         content_fingerprint: fingerprint,
         rule_id: args.rule.to_string(),
@@ -717,7 +720,7 @@ fn add_explicit_relationship(
     let related_uuid = resolve_finding_id(store, related_id_str)?;
     let rel_type: RelationshipType = relationship_str
         .parse()
-        .map_err(|e: String| TallyError::InvalidSeverity(e))?;
+        .map_err(|e: String| TallyError::InvalidInput(e))?;
 
     let mut finding = store.load_finding(&finding_uuid)?;
     finding.relationships.push(FindingRelationship {
@@ -737,7 +740,7 @@ fn parse_location_flag(s: &str) -> Result<Location> {
         3 => {
             // file:line:role
             let line: u32 = parts[1].parse().map_err(|_| {
-                TallyError::InvalidSeverity(format!("invalid line number in location: {s}"))
+                TallyError::InvalidInput(format!("invalid line number in location: {s}"))
             })?;
             let role = parse_location_role(parts[2])?;
             Ok(Location {
@@ -751,10 +754,10 @@ fn parse_location_flag(s: &str) -> Result<Location> {
         4 => {
             // file:line_start:line_end:role
             let line_start: u32 = parts[1].parse().map_err(|_| {
-                TallyError::InvalidSeverity(format!("invalid line_start in location: {s}"))
+                TallyError::InvalidInput(format!("invalid line_start in location: {s}"))
             })?;
             let line_end: u32 = parts[2].parse().map_err(|_| {
-                TallyError::InvalidSeverity(format!("invalid line_end in location: {s}"))
+                TallyError::InvalidInput(format!("invalid line_end in location: {s}"))
             })?;
             let role = parse_location_role(parts[3])?;
             Ok(Location {
@@ -765,7 +768,7 @@ fn parse_location_flag(s: &str) -> Result<Location> {
                 message: None,
             })
         }
-        _ => Err(TallyError::InvalidSeverity(format!(
+        _ => Err(TallyError::InvalidInput(format!(
             "invalid location format: '{s}' (expected file:line:role or file:line_start:line_end:role)"
         ))),
     }
@@ -776,7 +779,7 @@ fn parse_location_role(s: &str) -> Result<LocationRole> {
         "primary" => Ok(LocationRole::Primary),
         "secondary" => Ok(LocationRole::Secondary),
         "context" => Ok(LocationRole::Context),
-        other => Err(TallyError::InvalidSeverity(format!(
+        other => Err(TallyError::InvalidInput(format!(
             "invalid location role: '{other}' (valid: primary, secondary, context)"
         ))),
     }
@@ -912,6 +915,7 @@ fn process_batch_line(
         IdentityResolution::NewFinding | IdentityResolution::RelatedFinding { .. } => {
             let new_uuid = Uuid::now_v7();
             let finding = Finding {
+                schema_version: default_schema_version(),
                 uuid: new_uuid,
                 content_fingerprint: fingerprint,
                 rule_id: entry.rule_id,
@@ -1111,6 +1115,7 @@ fn import_single_finding(entry: &serde_json::Value, store: &GitFindingsStore) ->
     let new_uuid = Uuid::now_v7();
 
     let finding = Finding {
+        schema_version: default_schema_version(),
         uuid: new_uuid,
         content_fingerprint: fingerprint,
         rule_id,

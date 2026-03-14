@@ -9,9 +9,11 @@ use serde::{Deserialize, Serialize};
 /// Finding lifecycle state.
 ///
 /// Transitions are validated — see [`LifecycleState::allowed_transitions`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum LifecycleState {
+    #[default]
     Open,
     Acknowledged,
     InProgress,
@@ -123,9 +125,13 @@ impl std::str::FromStr for LifecycleState {
 /// A recorded state transition with full provenance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateTransition {
+    #[serde(default)]
     pub from: LifecycleState,
+    #[serde(default)]
     pub to: LifecycleState,
+    #[serde(default = "crate::model::finding::default_datetime")]
     pub timestamp: DateTime<Utc>,
+    #[serde(default)]
     pub agent_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,

@@ -2,13 +2,39 @@
 
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use tally::cli::handlers;
 use tally::cli::{Cli, Command};
 use tally::storage::GitFindingsStore;
 
+fn init_tracing(mcp_mode: bool) {
+    use tracing_subscriber::EnvFilter;
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+
+    if mcp_mode {
+        // MCP mode: log to stderr only, never stdout (stdout is JSON-RPC)
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .with_target(false)
+            .compact()
+            .init();
+    } else {
+        // CLI mode: log to stderr
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .with_target(false)
+            .compact()
+            .init();
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    init_tracing(matches!(cli.command, Command::McpServer));
 
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
@@ -137,6 +163,10 @@ fn run(cli: Cli) -> tally::error::Result<()> {
             let rt = tokio::runtime::Runtime::new().map_err(tally::error::TallyError::Io)?;
             rt.block_on(tally::mcp::server::run_mcp_server("."))
                 .map_err(|e| tally::error::TallyError::Io(std::io::Error::other(e.to_string())))
+        }
+        Command::Completions { shell } => {
+            clap_complete::generate(shell, &mut Cli::command(), "tally", &mut std::io::stdout());
+            Ok(())
         }
     }
 }

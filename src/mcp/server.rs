@@ -20,6 +20,7 @@ use uuid::Uuid;
 use crate::model::{
     AgentRecord, Finding, FindingIdentityResolver, IdentityResolution, LifecycleState, Location,
     LocationRole, Severity, StateTransition, Suppression, SuppressionType, compute_fingerprint,
+    default_schema_version,
 };
 use crate::storage::GitFindingsStore;
 
@@ -735,6 +736,7 @@ fn record_batch_entry(
         IdentityResolution::NewFinding | IdentityResolution::RelatedFinding { .. } => {
             let new_uuid = Uuid::now_v7();
             let finding = Finding {
+                schema_version: default_schema_version(),
                 uuid: new_uuid,
                 content_fingerprint: fingerprint,
                 rule_id: entry.rule_id.clone(),
@@ -779,6 +781,7 @@ fn build_finding(
     ctx: &GitContext,
 ) -> Finding {
     Finding {
+        schema_version: default_schema_version(),
         uuid,
         content_fingerprint: fingerprint,
         rule_id: input.rule_id.clone(),

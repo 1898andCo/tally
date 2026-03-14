@@ -281,6 +281,7 @@ fn lifecycle_from_str_invalid() {
 #[test]
 fn finding_serialization_roundtrip() {
     let finding = Finding {
+        schema_version: "1.0.0".to_string(),
         uuid: uuid::Uuid::now_v7(),
         content_fingerprint: "sha256:abc123".to_string(),
         rule_id: "unsafe-unwrap".to_string(),
@@ -350,6 +351,7 @@ fn lifecycle_serialization_roundtrip() {
 #[test]
 fn finding_with_empty_locations() {
     let finding = Finding {
+        schema_version: "1.0.0".to_string(),
         uuid: uuid::Uuid::now_v7(),
         content_fingerprint: "sha256:def456".to_string(),
         rule_id: "missing-test".to_string(),
@@ -389,6 +391,7 @@ fn finding_with_all_fields_populated() {
     let now = chrono::Utc::now();
     let related_uuid = uuid::Uuid::now_v7();
     let finding = Finding {
+        schema_version: "1.0.0".to_string(),
         uuid: uuid::Uuid::now_v7(),
         content_fingerprint: "sha256:all_fields".to_string(),
         rule_id: "sql-injection".to_string(),
@@ -473,8 +476,8 @@ fn finding_with_all_fields_populated() {
 // =============================================================================
 
 #[test]
-fn finding_deserialize_missing_required_field() {
-    // JSON missing "uuid" field entirely
+fn finding_deserialize_missing_fields_uses_defaults() {
+    // JSON missing "uuid" and other fields — should deserialize with defaults
     let json = r#"{
         "content_fingerprint": "sha256:abc",
         "rule_id": "test",
@@ -490,7 +493,16 @@ fn finding_deserialize_missing_required_field() {
         "repo_id": "test/repo"
     }"#;
     let result = serde_json::from_str::<Finding>(json);
-    assert!(result.is_err(), "missing uuid should fail deserialization");
+    assert!(
+        result.is_ok(),
+        "missing uuid should deserialize with nil default"
+    );
+    let finding = result.expect("should deserialize");
+    assert!(finding.uuid.is_nil(), "default uuid should be nil");
+    assert_eq!(
+        finding.schema_version, "1.0.0",
+        "schema_version should default to 1.0.0"
+    );
 }
 
 #[test]
