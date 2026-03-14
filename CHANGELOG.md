@@ -2,7 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-03-14
+
+### Bug Fixes
+
+- *(release)* Compute homebrew sha256 directly instead of bump-action
+
+### Features
+
+- *(mcp)* Full CLI parity — 5 new MCP tools (#4)
+
 ## [0.1.0] - 2026-03-14
+
+### Bug Fixes
+
+- *(release)* Drop x86_64-apple-darwin target, macos-13 deprecated
+- *(release)* Rename crate to tally-ng, binary stays tally
 
 ### Documentation
 
