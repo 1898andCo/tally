@@ -1024,6 +1024,7 @@ fn process_batch_line(
     }
 }
 
+#[must_use]
 pub fn export_csv(findings: &[Finding]) -> String {
     use std::fmt::Write;
     let mut out = String::from(
@@ -1050,6 +1051,7 @@ pub fn export_csv(findings: &[Finding]) -> String {
     out
 }
 
+#[must_use]
 pub fn export_sarif(findings: &[Finding]) -> String {
     let rules: Vec<serde_json::Value> = findings
         .iter()

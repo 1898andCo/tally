@@ -1095,7 +1095,8 @@ async fn mcp_unit_resource_by_rule() {
 
     let store = GitFindingsStore::open(&repo_path).expect("open");
 
-    let result = tally_ng::mcp::server::read_resource_by_rule(&store, "sql-injection").expect("rule");
+    let result =
+        tally_ng::mcp::server::read_resource_by_rule(&store, "sql-injection").expect("rule");
     let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
     assert_eq!(findings.len(), 1);
     assert!(findings[0]["title"].as_str().expect("t").contains("sql"));
@@ -1320,7 +1321,13 @@ async fn mcp_unit_initialize_store_fresh_repo() {
 // =============================================================================
 
 async fn record_sample(server: &TallyMcpServer) {
-    let input = make_record_input("src/main.rs", 42, "critical", "test finding", "unsafe-unwrap");
+    let input = make_record_input(
+        "src/main.rs",
+        42,
+        "critical",
+        "test finding",
+        "unsafe-unwrap",
+    );
     server
         .record_finding(Parameters(input))
         .await
