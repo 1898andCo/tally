@@ -4,7 +4,7 @@
 //! and verifies operations without affecting the working tree or HEAD.
 
 use chrono::Utc;
-use git2::{BranchType, Repository};
+use git2::{BranchType, FileMode, Repository};
 use tally::model::*;
 use tally::storage::GitFindingsStore;
 use uuid::Uuid;
@@ -610,5 +610,321 @@ fn init_creates_gitattributes() {
     assert!(
         entry.is_some(),
         ".gitattributes should exist on findings-data branch"
+    );
+}
+
+// =============================================================================
+// Coverage: init full tree verification
+// =============================================================================
+
+#[test]
+fn init_first_call_creates_full_tree() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+
+    // Ensure branch does NOT exist before init so we exercise the full init path
+    assert!(!store.branch_exists(), "branch should not exist yet");
+    store.init().expect("init");
+
+    let repo = Repository::open(&repo_path).expect("open repo");
+    let branch = repo
+        .find_branch("findings-data", BranchType::Local)
+        .expect("find branch");
+    let commit = branch.into_reference().peel_to_commit().expect("commit");
+    let tree = commit.tree().expect("tree");
+
+    // Verify schema.json
+    let schema_entry = tree
+        .get_name("schema.json")
+        .expect("schema.json must exist");
+    let schema_blob = repo.find_blob(schema_entry.id()).expect("schema blob");
+    let schema: serde_json::Value =
+        serde_json::from_slice(schema_blob.content()).expect("parse schema");
+    assert_eq!(schema["version"], "1.0.0");
+    assert_eq!(schema["format"], "one-file-per-finding");
+    assert!(schema["created_at"].is_string(), "created_at must be set");
+
+    // Verify .gitattributes
+    let ga_entry = tree
+        .get_name(".gitattributes")
+        .expect(".gitattributes must exist");
+    let ga_blob = repo.find_blob(ga_entry.id()).expect("gitattributes blob");
+    assert_eq!(
+        std::str::from_utf8(ga_blob.content()).expect("utf8"),
+        "index.json merge=ours\n"
+    );
+
+    // Verify findings/.gitkeep
+    let findings_entry = tree.get_name("findings").expect("findings dir must exist");
+    let findings_tree = repo.find_tree(findings_entry.id()).expect("findings tree");
+    let gitkeep = findings_tree
+        .get_name(".gitkeep")
+        .expect(".gitkeep must exist in findings/");
+    let gitkeep_blob = repo.find_blob(gitkeep.id()).expect("gitkeep blob");
+    assert!(
+        gitkeep_blob.content().is_empty(),
+        ".gitkeep should be an empty file"
+    );
+
+    // Verify the commit is an orphan (no parents)
+    assert_eq!(commit.parent_count(), 0, "init commit should be an orphan");
+}
+
+// =============================================================================
+// Coverage: load_all skips malformed findings
+// =============================================================================
+
+#[test]
+fn load_all_skips_malformed_finding() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    // Save a valid finding first
+    let valid_uuid = Uuid::now_v7();
+    store
+        .save_finding(&make_test_finding(valid_uuid))
+        .expect("save valid");
+
+    // Manually write a malformed JSON blob to findings/bad-finding.json on the branch
+    let repo = Repository::open(&repo_path).expect("open repo");
+    let bad_blob_oid = repo.blob(b"{ this is not valid json }").expect("bad blob");
+
+    let branch = repo
+        .find_branch("findings-data", BranchType::Local)
+        .expect("find branch");
+    let tip = branch
+        .into_reference()
+        .peel_to_commit()
+        .expect("tip commit");
+    let parent_tree = tip.tree().expect("tree");
+
+    let mut builder = git2::build::TreeUpdateBuilder::new();
+    builder.upsert("findings/bad-finding.json", bad_blob_oid, FileMode::Blob);
+    let new_tree_oid = builder
+        .create_updated(&repo, &parent_tree)
+        .expect("build tree");
+    let new_tree = repo.find_tree(new_tree_oid).expect("find tree");
+
+    let sig = git2::Signature::now("test", "test@test.com").expect("sig");
+    repo.commit(
+        Some("refs/heads/findings-data"),
+        &sig,
+        &sig,
+        "add malformed finding",
+        &new_tree,
+        &[&tip],
+    )
+    .expect("commit malformed finding");
+
+    // load_all should return only the valid finding and skip the malformed one
+    let findings = store.load_all().expect("load_all");
+    assert_eq!(
+        findings.len(),
+        1,
+        "should have exactly 1 valid finding, malformed one skipped"
+    );
+    assert_eq!(findings[0].uuid, valid_uuid);
+}
+
+// =============================================================================
+// Coverage: sync tests
+// =============================================================================
+
+/// Create a bare repo to act as upstream remote.
+fn setup_bare_upstream() -> (tempfile::TempDir, String) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().to_str().expect("path").to_string();
+    git2::Repository::init_bare(&path).expect("init bare");
+    (tmp, path)
+}
+
+/// Create a repo with an initial commit and an "origin" remote pointing at upstream.
+fn setup_repo_with_remote(upstream_path: &str) -> (tempfile::TempDir, String) {
+    let (tmp, repo_path) = setup_repo();
+    let repo = git2::Repository::open(&repo_path).expect("open");
+    repo.remote("origin", upstream_path).expect("add remote");
+    (tmp, repo_path)
+}
+
+#[test]
+fn sync_before_init_fails() {
+    let (_upstream_tmp, upstream_path) = setup_bare_upstream();
+    let (_tmp, repo_path) = setup_repo_with_remote(&upstream_path);
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+
+    // No init — branch doesn't exist
+    let result = store.sync("origin");
+    assert!(result.is_err(), "sync before init should fail");
+    let err_msg = format!("{}", result.expect_err("sync before init should fail"));
+    assert!(
+        err_msg.contains("not found"),
+        "error should mention branch not found, got: {err_msg}"
+    );
+}
+
+#[test]
+fn sync_no_remote_fails() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    // No remote configured
+    let result = store.sync("origin");
+    assert!(result.is_err(), "sync without remote should fail");
+}
+
+#[test]
+fn sync_first_push_to_bare() {
+    let (_upstream_tmp, upstream_path) = setup_bare_upstream();
+    let (_tmp, repo_path) = setup_repo_with_remote(&upstream_path);
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    // Save a finding
+    let uuid = Uuid::now_v7();
+    store.save_finding(&make_test_finding(uuid)).expect("save");
+
+    // Sync — should push to bare upstream
+    let result = store.sync("origin").expect("sync");
+    assert!(result.pushed, "first sync should push");
+
+    // Verify the bare repo now has the findings-data branch
+    let bare = Repository::open_bare(&upstream_path).expect("open bare");
+    let branch = bare.find_branch("findings-data", BranchType::Local);
+    assert!(
+        branch.is_ok(),
+        "bare repo should have findings-data branch after sync"
+    );
+}
+
+#[test]
+fn sync_fast_forward() {
+    let (_upstream_tmp, upstream_path) = setup_bare_upstream();
+
+    // Repo A: init and sync to establish remote branch (no findings yet)
+    let (_tmp_a, repo_a_path) = setup_repo_with_remote(&upstream_path);
+    let store_a = GitFindingsStore::open(&repo_a_path).expect("open A");
+    store_a.init().expect("init A");
+    store_a.sync("origin").expect("initial sync A");
+
+    // Repo B: fetch from upstream and create local branch from remote
+    let (_tmp_b, repo_b_path) = setup_repo_with_remote(&upstream_path);
+    {
+        let repo_b = Repository::open(&repo_b_path).expect("open B raw");
+        let mut remote = repo_b.find_remote("origin").expect("find remote");
+        remote.fetch(&["findings-data"], None, None).expect("fetch");
+        let remote_ref = repo_b
+            .find_reference("refs/remotes/origin/findings-data")
+            .expect("remote ref");
+        let remote_commit = remote_ref.peel_to_commit().expect("peel");
+        repo_b
+            .branch("findings-data", &remote_commit, false)
+            .expect("create local branch from remote");
+    }
+    let store_b = GitFindingsStore::open(&repo_b_path).expect("open B");
+
+    // A saves a finding and syncs (remote now ahead of B)
+    let uuid_a = Uuid::now_v7();
+    store_a
+        .save_finding(&make_test_finding(uuid_a))
+        .expect("save A");
+    store_a.sync("origin").expect("sync A with finding");
+
+    // B syncs — should fast-forward to A's state
+    let result = store_b.sync("origin").expect("sync B");
+    assert!(result.merged, "B should have merged (fast-forwarded)");
+
+    // Verify B can now load A's finding
+    let findings = store_b.load_all().expect("load_all B");
+    assert!(
+        findings.iter().any(|f| f.uuid == uuid_a),
+        "B should see A's finding after fast-forward"
+    );
+}
+
+#[test]
+fn sync_local_ahead() {
+    let (_upstream_tmp, upstream_path) = setup_bare_upstream();
+    let (_tmp, repo_path) = setup_repo_with_remote(&upstream_path);
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    // First sync to establish remote branch
+    let uuid1 = Uuid::now_v7();
+    store
+        .save_finding(&make_test_finding(uuid1))
+        .expect("save 1");
+    store.sync("origin").expect("first sync");
+
+    // Save another finding locally (local now ahead of remote)
+    let uuid2 = Uuid::now_v7();
+    store
+        .save_finding(&make_test_finding(uuid2))
+        .expect("save 2");
+
+    let result = store.sync("origin").expect("second sync");
+    assert!(result.pushed, "should push when local is ahead");
+    assert!(
+        !result.merged,
+        "should not merge when local is simply ahead"
+    );
+}
+
+#[test]
+fn sync_diverged_auto_merge() {
+    let (_upstream_tmp, upstream_path) = setup_bare_upstream();
+
+    // Repo A: init and sync to establish remote branch
+    let (_tmp_a, repo_a_path) = setup_repo_with_remote(&upstream_path);
+    let store_a = GitFindingsStore::open(&repo_a_path).expect("open A");
+    store_a.init().expect("init A");
+    store_a.sync("origin").expect("initial sync A");
+
+    // Repo B: fetch from upstream and create local branch from remote tracking ref
+    let (_tmp_b, repo_b_path) = setup_repo_with_remote(&upstream_path);
+    {
+        let repo_b = Repository::open(&repo_b_path).expect("open B raw");
+        let mut remote = repo_b.find_remote("origin").expect("find remote");
+        remote.fetch(&["findings-data"], None, None).expect("fetch");
+        let remote_ref = repo_b
+            .find_reference("refs/remotes/origin/findings-data")
+            .expect("remote ref");
+        let remote_commit = remote_ref.peel_to_commit().expect("peel");
+        repo_b
+            .branch("findings-data", &remote_commit, false)
+            .expect("create local branch from remote");
+    }
+    let store_b = GitFindingsStore::open(&repo_b_path).expect("open B");
+
+    // A saves finding-1 and syncs
+    let uuid_a = Uuid::now_v7();
+    store_a
+        .save_finding(&make_test_finding(uuid_a))
+        .expect("save A");
+    store_a.sync("origin").expect("sync A with finding");
+
+    // B saves finding-2 (different UUID, different file) and syncs
+    // This creates divergence: remote has finding-1, local has finding-2
+    let uuid_b = Uuid::now_v7();
+    store_b
+        .save_finding(&make_test_finding(uuid_b))
+        .expect("save B");
+    let result_b = store_b
+        .sync("origin")
+        .expect("sync B with diverged changes");
+
+    assert!(result_b.merged, "B should have merged diverged branches");
+    assert!(result_b.pushed, "B should have pushed merged result");
+
+    // Both findings should be visible in B
+    let findings_b = store_b.load_all().expect("load_all B");
+    assert!(
+        findings_b.iter().any(|f| f.uuid == uuid_a),
+        "B should see A's finding after merge"
+    );
+    assert!(
+        findings_b.iter().any(|f| f.uuid == uuid_b),
+        "B should see its own finding after merge"
     );
 }

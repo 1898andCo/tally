@@ -344,6 +344,204 @@ fn lifecycle_serialization_roundtrip() {
 }
 
 // =============================================================================
+// Finding: additional positive tests
+// =============================================================================
+
+#[test]
+fn finding_with_empty_locations() {
+    let finding = Finding {
+        uuid: uuid::Uuid::now_v7(),
+        content_fingerprint: "sha256:def456".to_string(),
+        rule_id: "missing-test".to_string(),
+        locations: vec![],
+        severity: Severity::Suggestion,
+        category: "coverage".to_string(),
+        tags: vec![],
+        title: "No test coverage".to_string(),
+        description: "Module has no tests.".to_string(),
+        suggested_fix: None,
+        evidence: None,
+        status: LifecycleState::Open,
+        state_history: vec![],
+        discovered_by: vec![AgentRecord {
+            agent_id: "claude-code".to_string(),
+            session_id: "sess_empty".to_string(),
+            detected_at: chrono::Utc::now(),
+            session_short_id: None,
+        }],
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        repo_id: "1898andCo/tally".to_string(),
+        branch: None,
+        pr_number: None,
+        commit_sha: None,
+        relationships: vec![],
+        suppression: None,
+    };
+
+    let json = serde_json::to_string_pretty(&finding).expect("serialize");
+    let deserialized: Finding = serde_json::from_str(&json).expect("deserialize");
+    assert!(deserialized.locations.is_empty());
+}
+
+#[test]
+fn finding_with_all_fields_populated() {
+    let now = chrono::Utc::now();
+    let related_uuid = uuid::Uuid::now_v7();
+    let finding = Finding {
+        uuid: uuid::Uuid::now_v7(),
+        content_fingerprint: "sha256:all_fields".to_string(),
+        rule_id: "sql-injection".to_string(),
+        locations: vec![
+            Location {
+                file_path: "src/db.rs".to_string(),
+                line_start: 10,
+                line_end: 15,
+                role: LocationRole::Primary,
+                message: Some("SQL query built from user input".to_string()),
+            },
+            Location {
+                file_path: "src/handler.rs".to_string(),
+                line_start: 42,
+                line_end: 42,
+                role: LocationRole::Secondary,
+                message: Some("User input originates here".to_string()),
+            },
+        ],
+        severity: Severity::Critical,
+        category: "security".to_string(),
+        tags: vec!["owasp-top10".to_string(), "injection".to_string()],
+        title: "SQL injection vulnerability".to_string(),
+        description: "User input is concatenated into SQL query.".to_string(),
+        suggested_fix: Some("Use parameterized queries.".to_string()),
+        evidence: Some(
+            "Line 12: format!(\"SELECT * FROM users WHERE id = {}\", user_input)".to_string(),
+        ),
+        status: LifecycleState::Acknowledged,
+        state_history: vec![StateTransition {
+            from: LifecycleState::Open,
+            to: LifecycleState::Acknowledged,
+            timestamp: now,
+            agent_id: "claude-code".to_string(),
+            reason: Some("Confirmed by developer".to_string()),
+            commit_sha: Some("abc123".to_string()),
+        }],
+        discovered_by: vec![AgentRecord {
+            agent_id: "claude-code".to_string(),
+            session_id: "sess_full".to_string(),
+            detected_at: now,
+            session_short_id: Some("C1".to_string()),
+        }],
+        created_at: now,
+        updated_at: now,
+        repo_id: "1898andCo/tally".to_string(),
+        branch: Some("feature/auth".to_string()),
+        pr_number: Some(42),
+        commit_sha: Some("deadbeef".to_string()),
+        relationships: vec![FindingRelationship {
+            related_finding_id: related_uuid,
+            relationship_type: RelationshipType::Causes,
+            reason: Some("Root cause of data leak".to_string()),
+            created_at: now,
+        }],
+        suppression: Some(Suppression {
+            suppressed_at: now,
+            reason: "False positive in test code".to_string(),
+            expires_at: Some(now + chrono::Duration::days(30)),
+            suppression_type: SuppressionType::InlineComment {
+                pattern: "tally:suppress sql-injection".to_string(),
+            },
+        }),
+    };
+
+    let json = serde_json::to_string_pretty(&finding).expect("serialize");
+    let deserialized: Finding = serde_json::from_str(&json).expect("deserialize");
+
+    assert_eq!(deserialized.uuid, finding.uuid);
+    assert_eq!(deserialized.locations.len(), 2);
+    assert_eq!(deserialized.tags.len(), 2);
+    assert_eq!(deserialized.state_history.len(), 1);
+    assert_eq!(deserialized.relationships.len(), 1);
+    assert!(deserialized.suppression.is_some());
+    assert!(deserialized.evidence.is_some());
+    assert_eq!(deserialized.pr_number, Some(42));
+    assert_eq!(deserialized.commit_sha.as_deref(), Some("deadbeef"));
+}
+
+// =============================================================================
+// Finding: negative deserialization tests
+// =============================================================================
+
+#[test]
+fn finding_deserialize_missing_required_field() {
+    // JSON missing "uuid" field entirely
+    let json = r#"{
+        "content_fingerprint": "sha256:abc",
+        "rule_id": "test",
+        "locations": [],
+        "severity": "critical",
+        "category": "test",
+        "title": "test",
+        "description": "test",
+        "status": "open",
+        "discovered_by": [],
+        "created_at": "2025-01-01T00:00:00Z",
+        "updated_at": "2025-01-01T00:00:00Z",
+        "repo_id": "test/repo"
+    }"#;
+    let result = serde_json::from_str::<Finding>(json);
+    assert!(result.is_err(), "missing uuid should fail deserialization");
+}
+
+#[test]
+fn finding_deserialize_invalid_severity() {
+    let json = r#"{
+        "uuid": "01938a6e-7c3b-7000-8000-000000000001",
+        "content_fingerprint": "sha256:abc",
+        "rule_id": "test",
+        "locations": [],
+        "severity": "ultra",
+        "category": "test",
+        "title": "test",
+        "description": "test",
+        "status": "open",
+        "discovered_by": [],
+        "created_at": "2025-01-01T00:00:00Z",
+        "updated_at": "2025-01-01T00:00:00Z",
+        "repo_id": "test/repo"
+    }"#;
+    let result = serde_json::from_str::<Finding>(json);
+    assert!(
+        result.is_err(),
+        "invalid severity 'ultra' should fail deserialization"
+    );
+}
+
+#[test]
+fn finding_deserialize_invalid_status() {
+    let json = r#"{
+        "uuid": "01938a6e-7c3b-7000-8000-000000000001",
+        "content_fingerprint": "sha256:abc",
+        "rule_id": "test",
+        "locations": [],
+        "severity": "critical",
+        "category": "test",
+        "title": "test",
+        "description": "test",
+        "status": "deleted",
+        "discovered_by": [],
+        "created_at": "2025-01-01T00:00:00Z",
+        "updated_at": "2025-01-01T00:00:00Z",
+        "repo_id": "test/repo"
+    }"#;
+    let result = serde_json::from_str::<Finding>(json);
+    assert!(
+        result.is_err(),
+        "invalid status 'deleted' should fail deserialization"
+    );
+}
+
+// =============================================================================
 // LocationRole tests
 // =============================================================================
 
@@ -530,6 +728,14 @@ fn suppression_type_inline_empty_pattern() {
 // =============================================================================
 
 #[test]
+fn lifecycle_from_str_numeric() {
+    assert!(
+        "123".parse::<LifecycleState>().is_err(),
+        "numeric string should not parse as LifecycleState"
+    );
+}
+
+#[test]
 fn lifecycle_from_str_hyphen_normalization() {
     assert_eq!(
         "false-positive".parse::<LifecycleState>().expect("parse"),
@@ -596,6 +802,33 @@ fn severity_from_str_unicode_rejects() {
     assert!(
         "cr\u{00EF}tical".parse::<Severity>().is_err(),
         "unicode characters should be rejected"
+    );
+}
+
+#[test]
+fn severity_from_str_mixed_case_valid() {
+    // All-caps
+    assert_eq!(
+        "CRITICAL".parse::<Severity>().expect("parse CRITICAL"),
+        Severity::Critical
+    );
+    // Title case
+    assert_eq!(
+        "Critical".parse::<Severity>().expect("parse Critical"),
+        Severity::Critical
+    );
+    // Mixed case
+    assert_eq!(
+        "cRiTiCaL".parse::<Severity>().expect("parse cRiTiCaL"),
+        Severity::Critical
+    );
+    assert_eq!(
+        "Suggestion".parse::<Severity>().expect("parse Suggestion"),
+        Severity::Suggestion
+    );
+    assert_eq!(
+        "TECH_DEBT".parse::<Severity>().expect("parse TECH_DEBT"),
+        Severity::TechDebt
     );
 }
 

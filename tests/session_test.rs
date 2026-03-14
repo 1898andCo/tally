@@ -132,6 +132,15 @@ fn len_and_is_empty() {
     assert_eq!(mapper.len(), 1);
 }
 
+// --- Default trait ---
+
+#[test]
+fn mapper_default_is_new() {
+    let mapper = SessionIdMapper::default();
+    assert!(mapper.is_empty());
+    assert_eq!(mapper.len(), 0);
+}
+
 // --- Negative tests ---
 
 #[test]
