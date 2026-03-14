@@ -1906,3 +1906,224 @@ async fn mcp_unit_add_tag_empty_tags_returns_error() {
 
     assert!(result.is_err());
 }
+
+// =============================================================================
+// Test gap coverage: get_finding_context with notes/edits, import defaults,
+// rebuild index tags, update_finding error message
+// =============================================================================
+
+#[tokio::test]
+async fn mcp_unit_get_context_includes_notes_and_edit_history() {
+    let (_tmp, server) = setup_mcp();
+    let uuid = record_and_get_uuid(&server).await;
+
+    // Add a note
+    server
+        .add_note(Parameters(AddNoteInput {
+            finding_id: uuid.clone(),
+            note: "context note for test".into(),
+            agent: Some("test-agent".into()),
+        }))
+        .await
+        .expect("add_note");
+
+    // Edit a field
+    server
+        .update_finding(Parameters(UpdateFindingInput {
+            finding_id: uuid.clone(),
+            title: None,
+            description: Some("updated via MCP".into()),
+            suggested_fix: None,
+            evidence: None,
+            severity: None,
+            category: None,
+            tags: None,
+            agent: None,
+        }))
+        .await
+        .expect("update_finding");
+
+    // Get context — should include notes and edit_history
+    let result = server
+        .get_finding_context(Parameters(GetContextInput { finding_id: uuid }))
+        .await
+        .expect("get_context");
+    let text = extract_tool_text(&result);
+
+    assert!(
+        text.contains("context note for test"),
+        "get_context should include note text"
+    );
+    assert!(
+        text.contains("edit_history"),
+        "get_context should include edit_history key"
+    );
+}
+
+#[tokio::test]
+async fn mcp_unit_import_finding_gets_empty_notes_and_edit_history() {
+    let (_tmp, server) = setup_mcp();
+
+    let import_file = tempfile::NamedTempFile::new().expect("temp file");
+    let state = serde_json::json!({
+        "active_cycle": {
+            "findings": [{
+                "id": "I1",
+                "title": "imported finding",
+                "file": "src/lib.rs",
+                "lines": [10],
+                "severity": "important",
+                "category": "test-import"
+            }]
+        }
+    });
+    std::fs::write(import_file.path(), state.to_string()).expect("write");
+
+    server
+        .import_findings(Parameters(ImportFindingsInput {
+            file_path: import_file.path().to_str().expect("path").into(),
+        }))
+        .await
+        .expect("import");
+
+    // Query to get the imported finding
+    let result = server
+        .query_findings(Parameters(QueryFindingsInput {
+            status: None,
+            severity: None,
+            file: Some("src/lib.rs".into()),
+            rule: None,
+            limit: None,
+            tag: None,
+        }))
+        .await
+        .expect("query");
+    let json = extract_tool_json(&result);
+    let findings = json.as_array().expect("array");
+    assert!(!findings.is_empty(), "should have imported finding");
+
+    // Verify notes and edit_history are absent from JSON (empty = omitted)
+    let finding_str = serde_json::to_string(&findings[0]).expect("serialize");
+    assert!(
+        !finding_str.contains("\"notes\""),
+        "imported finding should not have notes key (empty = omitted)"
+    );
+    assert!(
+        !finding_str.contains("\"edit_history\""),
+        "imported finding should not have edit_history key (empty = omitted)"
+    );
+}
+
+#[tokio::test]
+async fn mcp_unit_rebuild_index_includes_tags() {
+    let (_tmp, server) = setup_mcp();
+    let uuid = record_and_get_uuid(&server).await;
+
+    // Add tags
+    server
+        .add_tag(Parameters(TagInput {
+            finding_id: uuid,
+            tags: vec!["story:1.21".into(), "wave-1".into()],
+            agent: None,
+        }))
+        .await
+        .expect("add_tag");
+
+    // Rebuild index
+    server.rebuild_index().await.expect("rebuild");
+
+    // Verify tags survived through the rebuild by querying with tag filter
+    let result = server
+        .query_findings(Parameters(QueryFindingsInput {
+            status: None,
+            severity: None,
+            file: None,
+            rule: None,
+            limit: None,
+            tag: Some("story:1.21".into()),
+        }))
+        .await
+        .expect("query");
+    let json = extract_tool_json(&result);
+    let findings = json.as_array().expect("array");
+    assert_eq!(findings.len(), 1, "tagged finding should survive rebuild");
+}
+
+#[tokio::test]
+async fn mcp_unit_update_finding_no_fields_error_is_actionable() {
+    let (_tmp, server) = setup_mcp();
+    let uuid = record_and_get_uuid(&server).await;
+
+    let result = server
+        .update_finding(Parameters(UpdateFindingInput {
+            finding_id: uuid,
+            title: None,
+            description: None,
+            suggested_fix: None,
+            evidence: None,
+            severity: None,
+            category: None,
+            tags: None,
+            agent: None,
+        }))
+        .await;
+    assert!(result.is_err());
+    let err = result.expect_err("should error");
+    assert!(
+        err.message.contains("At least one field"),
+        "error should guide user: {}",
+        err.message
+    );
+}
+
+#[tokio::test]
+async fn mcp_unit_update_finding_nonexistent_returns_error() {
+    let (_tmp, server) = setup_mcp();
+
+    let result = server
+        .update_finding(Parameters(UpdateFindingInput {
+            finding_id: "00000000-0000-0000-0000-000000000000".into(),
+            title: Some("x".into()),
+            description: None,
+            suggested_fix: None,
+            evidence: None,
+            severity: None,
+            category: None,
+            tags: None,
+            agent: None,
+        }))
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn mcp_unit_add_note_nonexistent_returns_error() {
+    let (_tmp, server) = setup_mcp();
+
+    let result = server
+        .add_note(Parameters(AddNoteInput {
+            finding_id: "00000000-0000-0000-0000-000000000000".into(),
+            note: "test".into(),
+            agent: None,
+        }))
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn mcp_unit_remove_tag_on_finding_with_no_tags() {
+    let (_tmp, server) = setup_mcp();
+    let uuid = record_and_get_uuid(&server).await;
+
+    let result = server
+        .remove_tag(Parameters(TagInput {
+            finding_id: uuid,
+            tags: vec!["nonexistent".into()],
+            agent: None,
+        }))
+        .await;
+    assert!(result.is_ok());
+    let json = extract_tool_json(&result.expect("ok"));
+    let tags = json["tags"].as_array().expect("tags");
+    assert!(tags.is_empty());
+}

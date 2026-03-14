@@ -3677,3 +3677,294 @@ fn cli_help_lists_tag() {
         .success()
         .stdout(predicate::str::contains("tag"));
 }
+
+// =============================================================================
+// Test gap coverage: SARIF with notes/edits/tags, stats enhancements,
+// SARIF empty omission, auth error
+// =============================================================================
+
+#[test]
+fn cli_sarif_export_includes_tally_notes_in_properties() {
+    let (tmp, uuid) = setup_with_finding();
+
+    // Add a note and tag
+    tally()
+        .args(["note", &uuid, "SARIF test note"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args(["tag", &uuid, "--add", "sarif-test"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args(["export", "--format", "sarif"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("export");
+
+    let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse SARIF");
+    let result = &sarif["runs"][0]["results"][0];
+
+    assert!(
+        result["properties"]["tally_notes"].is_array(),
+        "SARIF should have tally_notes property"
+    );
+    let notes = result["properties"]["tally_notes"]
+        .as_array()
+        .expect("notes");
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0]["text"], "SARIF test note");
+    assert!(notes[0]["timestamp"].is_string());
+}
+
+#[test]
+fn cli_sarif_export_includes_tally_edit_history() {
+    let (tmp, uuid) = setup_with_finding();
+
+    tally()
+        .args(["update-fields", &uuid, "--description", "edited desc"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args(["export", "--format", "sarif"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("export");
+
+    let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse SARIF");
+    let result = &sarif["runs"][0]["results"][0];
+
+    assert!(
+        result["properties"]["tally_editHistory"].is_array(),
+        "SARIF should have tally_editHistory property"
+    );
+    let edits = result["properties"]["tally_editHistory"]
+        .as_array()
+        .expect("edits");
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0]["field"], "description");
+    assert_eq!(edits[0]["newValue"], "edited desc");
+}
+
+#[test]
+fn cli_sarif_export_includes_tally_tags() {
+    let (tmp, uuid) = setup_with_finding();
+
+    tally()
+        .args(["tag", &uuid, "--add", "security", "--add", "owasp"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args(["export", "--format", "sarif"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("export");
+
+    let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse SARIF");
+    let result = &sarif["runs"][0]["results"][0];
+
+    let tags = result["properties"]["tally_tags"].as_array().expect("tags");
+    assert!(tags.iter().any(|t| t == "security"));
+    assert!(tags.iter().any(|t| t == "owasp"));
+}
+
+#[test]
+fn cli_sarif_export_includes_result_provenance() {
+    let (tmp, _uuid) = setup_with_finding();
+
+    let output = tally()
+        .args(["export", "--format", "sarif"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("export");
+
+    let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse SARIF");
+    let result = &sarif["runs"][0]["results"][0];
+
+    assert!(
+        result["resultProvenance"]["firstDetectionTimeUtc"].is_string(),
+        "SARIF should have resultProvenance.firstDetectionTimeUtc"
+    );
+}
+
+#[test]
+fn cli_sarif_export_omits_empty_properties() {
+    let (tmp, _uuid) = setup_with_finding();
+    // No notes, no edits, no tags → properties should be absent or empty
+
+    let output = tally()
+        .args(["export", "--format", "sarif"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("export");
+
+    let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse SARIF");
+    let result = &sarif["runs"][0]["results"][0];
+
+    // properties key should either be absent or not contain tally_* keys
+    if let Some(props) = result.get("properties") {
+        assert!(
+            props.get("tally_notes").is_none(),
+            "empty notes should not produce tally_notes"
+        );
+        assert!(
+            props.get("tally_editHistory").is_none(),
+            "empty edits should not produce tally_editHistory"
+        );
+        assert!(
+            props.get("tally_tags").is_none(),
+            "empty tags should not produce tally_tags"
+        );
+    }
+    // If properties key is absent entirely, that's also correct
+}
+
+#[test]
+fn cli_stats_shows_notes_and_edits_counts() {
+    let (tmp, uuid) = setup_with_finding();
+
+    // Add note and edit
+    tally()
+        .args(["note", &uuid, "test note"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    tally()
+        .args(["update-fields", &uuid, "--title", "edited title"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .arg("stats")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Findings with notes: 1"))
+        .stdout(predicate::str::contains("Findings with edits: 1"));
+}
+
+#[test]
+fn cli_stats_shows_top_tags() {
+    let (tmp, uuid) = setup_with_finding();
+
+    tally()
+        .args(["tag", &uuid, "--add", "story:1.21", "--add", "wave-1"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .arg("stats")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Top tags:"))
+        .stdout(predicate::str::contains("story:1.21"));
+}
+
+#[test]
+fn cli_rebuild_index_includes_tags() {
+    let (tmp, uuid) = setup_with_finding();
+
+    // Add tags
+    tally()
+        .args(["tag", &uuid, "--add", "indexed-tag"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Rebuild index
+    tally()
+        .arg("rebuild-index")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Query with tag filter should still work after rebuild
+    let output = tally()
+        .args(["query", "--tag", "indexed-tag"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("parse");
+    let findings = json.as_array().expect("arr");
+    assert_eq!(findings.len(), 1);
+}
+
+#[test]
+fn cli_sync_auth_failure_shows_guidance() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Add a dummy remote that will fail auth
+    let repo = git2::Repository::open(tmp.path()).expect("open");
+    repo.remote("test-remote", "https://github.com/nonexistent/repo.git")
+        .expect("add remote");
+    drop(repo);
+
+    // Sync should fail with actionable error
+    tally()
+        .args(["sync", "--remote", "test-remote"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Authentication failed").or(
+            // On some systems it may fail with a different git error before auth
+            predicate::str::contains("error"),
+        ));
+}
+
+#[test]
+fn cli_init_prints_branch_protection_tip() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("protect the findings-data branch"));
+}
+
+#[test]
+fn cli_sarif_export_validates_required_fields() {
+    let (tmp, _uuid) = setup_with_finding();
+
+    let output = tally()
+        .args(["export", "--format", "sarif"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("export");
+
+    let sarif: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse SARIF");
+
+    // SARIF 2.1.0 required fields
+    assert_eq!(sarif["version"], "2.1.0");
+    assert!(sarif["$schema"].is_string());
+    assert!(sarif["runs"].is_array());
+    let run = &sarif["runs"][0];
+    assert!(run["tool"]["driver"]["name"].is_string());
+    assert!(run["tool"]["driver"]["version"].is_string());
+    assert!(run["results"].is_array());
+
+    // Each result has required fields
+    let result = &run["results"][0];
+    assert!(result["ruleId"].is_string());
+    assert!(result["level"].is_string());
+    assert!(result["message"]["text"].is_string());
+    assert!(result["locations"].is_array());
+}

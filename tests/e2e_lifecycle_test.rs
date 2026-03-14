@@ -940,3 +940,320 @@ fn e2e_output_format_consistency() {
         .success()
         .stdout(predicate::str::contains("Total:       2"));
 }
+
+// =============================================================================
+// E2E 11: Record → note → tag → query with tag filter → stats
+// =============================================================================
+
+#[test]
+fn e2e_note_tag_query_workflow() {
+    let tmp = setup_repo();
+    let dir = tmp.path();
+    tally().arg("init").current_dir(dir).assert().success();
+
+    // Record two findings
+    let f1 = run_record(
+        dir,
+        "src/lib.rs",
+        10,
+        "important",
+        "missing validation",
+        "missing-val",
+    );
+    let uuid1 = get_uuid(&f1);
+    let _f2 = run_record(
+        dir,
+        "src/api.rs",
+        20,
+        "suggestion",
+        "style issue",
+        "style-lint",
+    );
+
+    // Add note to first
+    tally()
+        .args(["note", &uuid1, "Covered by Story 1.21 AC-2"])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Add tags to first
+    tally()
+        .args(["tag", &uuid1, "--add", "story:1.21", "--add", "wave-1"])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Query with tag filter — only first finding returned
+    let tagged = run_query_json(dir, &["--tag", "story:1.21"]);
+    assert_eq!(tagged.len(), 1);
+    assert_eq!(tagged[0]["uuid"], uuid1);
+
+    // Query all — both returned
+    let all = run_query_json(dir, &[]);
+    assert_eq!(all.len(), 2);
+
+    // Stats shows notes and tags
+    tally()
+        .arg("stats")
+        .current_dir(dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Findings with notes: 1"))
+        .stdout(predicate::str::contains("Top tags:"))
+        .stdout(predicate::str::contains("story:1.21"));
+}
+
+// =============================================================================
+// E2E 12: Record → update-fields → verify edit history in SARIF export
+// =============================================================================
+
+#[test]
+fn e2e_update_fields_sarif_export() {
+    let tmp = setup_repo();
+    let dir = tmp.path();
+    tally().arg("init").current_dir(dir).assert().success();
+
+    let f = run_record(
+        dir,
+        "src/main.rs",
+        42,
+        "important",
+        "unwrap on Option",
+        "unsafe-unwrap",
+    );
+    let uuid = get_uuid(&f);
+
+    // Update description and add note
+    tally()
+        .args([
+            "update-fields",
+            &uuid,
+            "--description",
+            "Use ? operator instead",
+            "--suggested-fix",
+            "Replace .unwrap() with ?",
+        ])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    tally()
+        .args(["note", &uuid, "Deep research confirmed ? is preferred"])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    tally()
+        .args(["tag", &uuid, "--add", "check-drift"])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Export SARIF — verify property bags
+    let output = tally()
+        .args(["export", "--format", "sarif"])
+        .current_dir(dir)
+        .output()
+        .expect("export");
+    let sarif: Value = serde_json::from_slice(&output.stdout).expect("parse SARIF");
+
+    let result = &sarif["runs"][0]["results"][0];
+    assert!(result["resultProvenance"]["firstDetectionTimeUtc"].is_string());
+    assert!(result["properties"]["tally_notes"].is_array());
+    assert!(result["properties"]["tally_editHistory"].is_array());
+    assert!(result["properties"]["tally_tags"].is_array());
+
+    let notes = result["properties"]["tally_notes"]
+        .as_array()
+        .expect("notes");
+    assert_eq!(notes.len(), 1);
+    assert!(
+        notes[0]["text"]
+            .as_str()
+            .expect("text")
+            .contains("Deep research")
+    );
+
+    let edits = result["properties"]["tally_editHistory"]
+        .as_array()
+        .expect("edits");
+    assert_eq!(edits.len(), 3); // description + suggested_fix + tags
+    assert_eq!(edits[0]["field"], "description");
+
+    let tags = result["properties"]["tally_tags"].as_array().expect("tags");
+    assert!(tags.iter().any(|t| t == "check-drift"));
+}
+
+// =============================================================================
+// E2E 13: Deferred → reopen → add note → update fields
+// =============================================================================
+
+#[test]
+fn e2e_deferred_reopen_annotate_workflow() {
+    let tmp = setup_repo();
+    let dir = tmp.path();
+    tally().arg("init").current_dir(dir).assert().success();
+
+    let f = run_record(
+        dir,
+        "src/config.rs",
+        5,
+        "suggestion",
+        "OcsfVersion re-export",
+        "ocsf-export",
+    );
+    let uuid = get_uuid(&f);
+
+    // Defer the finding
+    tally()
+        .args([
+            "update",
+            &uuid,
+            "--status",
+            "deferred",
+            "--reason",
+            "deferred to next sprint",
+        ])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Reopen (new v0.5.0 transition)
+    tally()
+        .args([
+            "update",
+            &uuid,
+            "--status",
+            "reopened",
+            "--reason",
+            "covered by Story 1.21 AC-2",
+        ])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Add context note
+    tally()
+        .args(["note", &uuid, "Story 1.21 AC-2 handles this re-export"])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Update description with new understanding
+    tally()
+        .args([
+            "update-fields",
+            &uuid,
+            "--description",
+            "Re-export covered by Story 1.21",
+        ])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Move to in_progress
+    tally()
+        .args(["update", &uuid, "--status", "in_progress"])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Resolve
+    tally()
+        .args([
+            "update",
+            &uuid,
+            "--status",
+            "resolved",
+            "--reason",
+            "fixed in Story 1.21",
+        ])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Verify final state
+    let findings = run_query_json(dir, &["--status", "resolved"]);
+    assert_eq!(findings.len(), 1);
+    assert_eq!(
+        findings[0]["description"],
+        "Re-export covered by Story 1.21"
+    );
+    assert_eq!(findings[0]["notes"].as_array().expect("notes").len(), 1);
+    assert!(
+        !findings[0]["edit_history"]
+            .as_array()
+            .expect("edits")
+            .is_empty()
+    );
+}
+
+// =============================================================================
+// E2E 14: Suppressed → reopen → acknowledge workflow
+// =============================================================================
+
+#[test]
+fn e2e_suppressed_reopen_workflow() {
+    let tmp = setup_repo();
+    let dir = tmp.path();
+    tally().arg("init").current_dir(dir).assert().success();
+
+    let f = run_record(
+        dir,
+        "src/api.rs",
+        100,
+        "important",
+        "auth bypass",
+        "auth-bypass",
+    );
+    let uuid = get_uuid(&f);
+
+    // Suppress
+    tally()
+        .args([
+            "suppress",
+            &uuid,
+            "--reason",
+            "accepted risk for internal API",
+        ])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Reopen (new v0.5.0 transition)
+    tally()
+        .args([
+            "update",
+            &uuid,
+            "--status",
+            "reopened",
+            "--reason",
+            "API is now public-facing",
+        ])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Acknowledge
+    tally()
+        .args([
+            "update",
+            &uuid,
+            "--status",
+            "acknowledged",
+            "--reason",
+            "needs fix before launch",
+        ])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    let findings = run_query_json(dir, &["--status", "acknowledged"]);
+    assert_eq!(findings.len(), 1);
+    // State history should have: open→suppressed, suppressed→reopened, reopened→acknowledged
+    let history = findings[0]["state_history"].as_array().expect("history");
+    assert_eq!(history.len(), 3);
+    assert_eq!(history[1]["from"], "suppressed");
+    assert_eq!(history[1]["to"], "reopened");
+}
