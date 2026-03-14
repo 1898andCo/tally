@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-03-14
+
+### Bug Fixes
+
+- *(storage)* Add git2 credential callbacks to sync operations
+- *(storage)* Make auth cross-platform with SSH key fallback
+
+### Documentation
+
+- Add project foundation files and BMAD framework
+- Remediate all story spec gaps
+- Add upgrade instructions and v0.4.0→v0.5.0 migration note
+
+### Features
+
+- *(model)* Add Note, FieldEdit structs and edit_field/add_note methods
+- *(state)* Add deferred/suppressed to reopened transitions
+- *(mcp)* Add update_finding, add_note, add_tag, remove_tag tools
+- *(cli)* Add update-fields, note, tag commands and query --tag filter
+- *(export)* Add SARIF property bags, stats enhancements, schema v1.1.0
+
+### Refactor
+
+- *(cli)* Split handlers.rs into per-handler modules
+- *(test)* Split cli_test.rs into 6 focused test files
+
+### Testing
+
+- Add 22 tests covering all v0.5.0 gaps
+
 ## [0.4.0] - 2026-03-14
 
 ### Documentation
