@@ -34,7 +34,7 @@ env:
 jobs:
   coverage:
     name: Code Coverage
-    runs-on: [self-hosted, Ubuntu, Common]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
