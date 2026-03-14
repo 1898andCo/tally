@@ -1,62 +1,79 @@
-//! Task 2.10: Property-based tests for fingerprint determinism.
+//! Property-based tests for identity and model types.
 
 use proptest::prelude::*;
-use tally::model::{Location, LocationRole, compute_fingerprint};
+use tally::model::*;
+
+// =============================================================================
+// Fingerprint property tests
+// =============================================================================
 
 proptest! {
-    /// Same (file, line_start, line_end, rule) always produces the same fingerprint.
     #[test]
-    fn fingerprint_is_deterministic(
-        file in "[a-z_/]{1,30}\\.rs",
-        line_start in 1u32..10000,
-        line_end in 1u32..10000,
-        rule in "[a-z_-]{3,20}",
-    ) {
+    fn proptest_fingerprint_special_chars_in_path(file_path in ".*") {
         let loc = Location {
-            file_path: file,
-            line_start,
-            line_end,
+            file_path,
+            line_start: 1,
+            line_end: 1,
             role: LocationRole::Primary,
             message: None,
         };
-
-        let fp1 = compute_fingerprint(&loc, &rule);
-        let fp2 = compute_fingerprint(&loc, &rule);
-        prop_assert_eq!(&fp1, &fp2);
-        prop_assert!(fp1.starts_with("sha256:"));
+        let fp = compute_fingerprint(&loc, "rule-x");
+        prop_assert!(fp.starts_with("sha256:"), "fingerprint should start with sha256: prefix");
+        prop_assert_eq!(fp.len(), 7 + 64, "fingerprint should be sha256: + 64 hex chars");
     }
+}
 
-    /// Different inputs produce different fingerprints (collision resistance).
+// =============================================================================
+// LifecycleState property tests
+// =============================================================================
+
+fn arb_lifecycle_state() -> impl Strategy<Value = LifecycleState> {
+    prop_oneof![
+        Just(LifecycleState::Open),
+        Just(LifecycleState::Acknowledged),
+        Just(LifecycleState::InProgress),
+        Just(LifecycleState::Resolved),
+        Just(LifecycleState::FalsePositive),
+        Just(LifecycleState::WontFix),
+        Just(LifecycleState::Deferred),
+        Just(LifecycleState::Suppressed),
+        Just(LifecycleState::Reopened),
+        Just(LifecycleState::Closed),
+    ]
+}
+
+proptest! {
     #[test]
-    fn fingerprint_changes_with_any_input_change(
-        file_a in "[a-z]{1,10}\\.rs",
-        file_b in "[a-z]{1,10}\\.rs",
-        line_a in 1u32..5000,
-        line_b in 5001u32..10000,
-        rule in "[a-z_-]{3,20}",
-    ) {
-        let loc_a = Location {
-            file_path: file_a.clone(),
-            line_start: line_a,
-            line_end: line_a,
-            role: LocationRole::Primary,
-            message: None,
-        };
-        let loc_b = Location {
-            file_path: file_b.clone(),
-            line_start: line_b,
-            line_end: line_b,
-            role: LocationRole::Primary,
-            message: None,
-        };
+    fn proptest_lifecycle_display_roundtrip(state in arb_lifecycle_state()) {
+        let display = state.to_string();
+        let parsed: LifecycleState = display.parse().map_err(|e: String| {
+            TestCaseError::Fail(e.into())
+        })?;
+        prop_assert_eq!(state, parsed);
+    }
+}
 
-        // At minimum the line ranges differ, so fingerprints should differ
-        let fp_a = compute_fingerprint(&loc_a, &rule);
-        let fp_b = compute_fingerprint(&loc_b, &rule);
+// =============================================================================
+// Severity property tests
+// =============================================================================
 
-        // Only assert different if inputs actually differ
-        if file_a != file_b || line_a != line_b {
-            prop_assert_ne!(fp_a, fp_b);
-        }
+fn arb_severity() -> impl Strategy<Value = Severity> {
+    prop_oneof![
+        Just(Severity::Critical),
+        Just(Severity::Important),
+        Just(Severity::Suggestion),
+        Just(Severity::TechDebt),
+    ]
+}
+
+proptest! {
+    #[test]
+    fn proptest_severity_display_roundtrip(sev in arb_severity()) {
+        let display = sev.to_string();
+        // Display is uppercase (e.g. "CRITICAL") but FromStr accepts lowercase
+        let parsed: Severity = display.to_ascii_lowercase().parse().map_err(|e: String| {
+            TestCaseError::Fail(e.into())
+        })?;
+        prop_assert_eq!(sev, parsed);
     }
 }

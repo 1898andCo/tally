@@ -309,3 +309,213 @@ fn primary_location_falls_back_to_first() {
 fn primary_location_empty_returns_none() {
     assert!(primary_location(&[]).is_none());
 }
+
+// =============================================================================
+// Additional fingerprint tests
+// =============================================================================
+
+#[test]
+fn fingerprint_empty_file_path() {
+    let loc = Location {
+        file_path: String::new(),
+        line_start: 1,
+        line_end: 1,
+        role: LocationRole::Primary,
+        message: None,
+    };
+    let fp = compute_fingerprint(&loc, "some-rule");
+    assert!(
+        fp.starts_with("sha256:"),
+        "empty file_path should still produce valid sha256 hash"
+    );
+    assert_eq!(fp.len(), 7 + 64);
+}
+
+#[test]
+fn fingerprint_empty_rule_id() {
+    let loc = Location {
+        file_path: "src/main.rs".to_string(),
+        line_start: 1,
+        line_end: 1,
+        role: LocationRole::Primary,
+        message: None,
+    };
+    let fp = compute_fingerprint(&loc, "");
+    assert!(
+        fp.starts_with("sha256:"),
+        "empty rule_id should still produce valid sha256 hash"
+    );
+    assert_eq!(fp.len(), 7 + 64);
+}
+
+#[test]
+fn fingerprint_line_end_matters() {
+    let loc_a = Location {
+        file_path: "src/main.rs".to_string(),
+        line_start: 10,
+        line_end: 10,
+        role: LocationRole::Primary,
+        message: None,
+    };
+    let loc_b = Location {
+        file_path: "src/main.rs".to_string(),
+        line_start: 10,
+        line_end: 20,
+        role: LocationRole::Primary,
+        message: None,
+    };
+
+    let fp_a = compute_fingerprint(&loc_a, "rule-x");
+    let fp_b = compute_fingerprint(&loc_b, "rule-x");
+    assert_ne!(
+        fp_a, fp_b,
+        "different line_end should produce different fingerprints"
+    );
+}
+
+#[test]
+fn fingerprint_max_line_numbers() {
+    let loc = Location {
+        file_path: "src/main.rs".to_string(),
+        line_start: u32::MAX,
+        line_end: u32::MAX,
+        role: LocationRole::Primary,
+        message: None,
+    };
+    let fp = compute_fingerprint(&loc, "rule-x");
+    assert!(
+        fp.starts_with("sha256:"),
+        "u32::MAX line numbers should still produce valid sha256 hash"
+    );
+    assert_eq!(fp.len(), 7 + 64);
+}
+
+// =============================================================================
+// Additional identity resolution tests
+// =============================================================================
+
+#[test]
+fn resolver_same_rule_different_files() {
+    let uuid = Uuid::now_v7();
+    let existing = make_finding(uuid, "src/main.rs", 42, "unsafe-unwrap");
+    let resolver = FindingIdentityResolver::from_findings(&[existing]);
+
+    // Same rule, close line, but different file — should NOT match proximity
+    let loc = Location {
+        file_path: "src/lib.rs".to_string(),
+        line_start: 43,
+        line_end: 43,
+        role: LocationRole::Primary,
+        message: None,
+    };
+    let fp = compute_fingerprint(&loc, "unsafe-unwrap");
+
+    let result = resolver.resolve(&fp, "src/lib.rs", 43, "unsafe-unwrap", 5);
+    assert_eq!(
+        result,
+        IdentityResolution::NewFinding,
+        "proximity on wrong file should return NewFinding"
+    );
+}
+
+#[test]
+fn resolver_proximity_at_boundary() {
+    let uuid = Uuid::now_v7();
+    let existing = make_finding(uuid, "src/main.rs", 50, "unsafe-unwrap");
+    let resolver = FindingIdentityResolver::from_findings(&[existing]);
+
+    // Distance == threshold (5) → should be RelatedFinding
+    let loc_at = Location {
+        file_path: "src/main.rs".to_string(),
+        line_start: 55,
+        line_end: 55,
+        role: LocationRole::Primary,
+        message: None,
+    };
+    let fp_at = compute_fingerprint(&loc_at, "unsafe-unwrap");
+    let result_at = resolver.resolve(&fp_at, "src/main.rs", 55, "unsafe-unwrap", 5);
+    assert_eq!(
+        result_at,
+        IdentityResolution::RelatedFinding { uuid, distance: 5 },
+        "distance == threshold should be RelatedFinding"
+    );
+
+    // Distance == threshold+1 (6) → should be NewFinding
+    let loc_beyond = Location {
+        file_path: "src/main.rs".to_string(),
+        line_start: 56,
+        line_end: 56,
+        role: LocationRole::Primary,
+        message: None,
+    };
+    let fp_beyond = compute_fingerprint(&loc_beyond, "unsafe-unwrap");
+    let result_beyond = resolver.resolve(&fp_beyond, "src/main.rs", 56, "unsafe-unwrap", 5);
+    assert_eq!(
+        result_beyond,
+        IdentityResolution::NewFinding,
+        "distance == threshold+1 should be NewFinding"
+    );
+}
+
+#[test]
+fn resolver_secondary_location_not_indexed() {
+    // Create a finding where primary is at line 100, secondary at line 10
+    let uuid = Uuid::now_v7();
+    let primary_loc = Location {
+        file_path: "src/main.rs".to_string(),
+        line_start: 100,
+        line_end: 100,
+        role: LocationRole::Primary,
+        message: None,
+    };
+    let secondary_loc = Location {
+        file_path: "src/main.rs".to_string(),
+        line_start: 10,
+        line_end: 10,
+        role: LocationRole::Secondary,
+        message: None,
+    };
+    let fp = compute_fingerprint(&primary_loc, "unsafe-unwrap");
+    let finding = Finding {
+        uuid,
+        content_fingerprint: fp,
+        rule_id: "unsafe-unwrap".to_string(),
+        locations: vec![primary_loc, secondary_loc],
+        severity: Severity::Important,
+        category: "test".to_string(),
+        tags: vec![],
+        title: "test finding".to_string(),
+        description: "test".to_string(),
+        suggested_fix: None,
+        evidence: None,
+        status: LifecycleState::Open,
+        state_history: vec![],
+        discovered_by: vec![],
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        repo_id: "test/repo".to_string(),
+        branch: None,
+        pr_number: None,
+        commit_sha: None,
+        relationships: vec![],
+        suppression: None,
+    };
+
+    let resolver = FindingIdentityResolver::from_findings(&[finding]);
+
+    // A new finding at line 10 (where the secondary location was) should NOT match
+    let new_loc = Location {
+        file_path: "src/main.rs".to_string(),
+        line_start: 10,
+        line_end: 10,
+        role: LocationRole::Primary,
+        message: None,
+    };
+    let new_fp = compute_fingerprint(&new_loc, "unsafe-unwrap");
+    let result = resolver.resolve(&new_fp, "src/main.rs", 10, "unsafe-unwrap", 5);
+    assert_eq!(
+        result,
+        IdentityResolution::NewFinding,
+        "secondary location should NOT be indexed for proximity matching"
+    );
+}

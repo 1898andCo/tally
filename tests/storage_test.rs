@@ -357,6 +357,218 @@ fn save_before_init_errors() {
     assert!(result.is_err(), "save before init should error");
 }
 
+// =============================================================================
+// git_context tests
+// =============================================================================
+
+#[test]
+fn git_context_without_remote() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+
+    let (repo_id, branch, sha) = store.git_context();
+    assert!(
+        repo_id.is_empty(),
+        "repo without remotes should have empty repo_id"
+    );
+    assert!(branch.is_some(), "repo with HEAD should have a branch name");
+    assert!(sha.is_some(), "repo with commits should have a commit SHA");
+}
+
+#[test]
+fn git_context_with_remote() {
+    let (_tmp, repo_path) = setup_repo();
+
+    // Add an origin remote
+    let repo = Repository::open(&repo_path).expect("open repo");
+    repo.remote("origin", "https://github.com/example/repo.git")
+        .expect("add remote");
+
+    let store = GitFindingsStore::open(&repo_path).expect("open store");
+    let (repo_id, branch, sha) = store.git_context();
+
+    assert_eq!(
+        repo_id, "https://github.com/example/repo.git",
+        "should return origin URL as repo_id"
+    );
+    assert!(branch.is_some(), "should have a branch name");
+    assert!(sha.is_some(), "should have a commit SHA");
+}
+
+// =============================================================================
+// rebuild_index tests
+// =============================================================================
+
+#[test]
+fn rebuild_index_with_empty_findings() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    // No findings saved — rebuild should still succeed
+    store.rebuild_index().expect("rebuild_index");
+
+    // Verify index.json exists and has empty findings array by loading all
+    let findings = store.load_all().expect("load_all");
+    assert!(
+        findings.is_empty(),
+        "no findings should exist after rebuild with empty store"
+    );
+}
+
+#[test]
+fn rebuild_index_is_idempotent() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    // Save 3 findings
+    for _ in 0..3 {
+        store
+            .save_finding(&make_test_finding(Uuid::now_v7()))
+            .expect("save");
+    }
+
+    // Rebuild twice
+    store.rebuild_index().expect("first rebuild");
+    store.rebuild_index().expect("second rebuild");
+
+    // Verify count is still 3
+    let findings = store.load_all().expect("load_all");
+    assert_eq!(
+        findings.len(),
+        3,
+        "rebuild_index should be idempotent — still 3 findings"
+    );
+}
+
+// =============================================================================
+// load_all tests
+// =============================================================================
+
+#[test]
+fn load_all_after_init_returns_empty() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    let findings = store.load_all().expect("load_all");
+    assert!(
+        findings.is_empty(),
+        "load_all after init with no saves should return empty Vec, not error"
+    );
+}
+
+// =============================================================================
+// save/load with optional fields
+// =============================================================================
+
+#[test]
+fn save_finding_with_all_optional_fields() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    let uuid = Uuid::now_v7();
+    let mut finding = make_test_finding(uuid);
+    finding.suggested_fix = Some("Use the ? operator instead of unwrap()".to_string());
+    finding.evidence = Some("line 42: let x = foo.unwrap();".to_string());
+    finding.tags = vec!["safety".to_string(), "error-handling".to_string()];
+    finding.relationships = vec![tally::model::FindingRelationship {
+        related_finding_id: Uuid::now_v7(),
+        relationship_type: tally::model::RelationshipType::RelatedTo,
+        reason: Some("Same pattern".to_string()),
+        created_at: Utc::now(),
+    }];
+    finding.suppression = Some(tally::model::Suppression {
+        suppressed_at: Utc::now(),
+        reason: "Known issue".to_string(),
+        expires_at: None,
+        suppression_type: tally::model::SuppressionType::Global,
+    });
+
+    store.save_finding(&finding).expect("save");
+    let loaded = store.load_finding(&uuid).expect("load");
+
+    assert_eq!(
+        loaded.suggested_fix.as_deref(),
+        Some("Use the ? operator instead of unwrap()")
+    );
+    assert_eq!(
+        loaded.evidence.as_deref(),
+        Some("line 42: let x = foo.unwrap();")
+    );
+    assert_eq!(loaded.tags, vec!["safety", "error-handling"]);
+    assert_eq!(loaded.relationships.len(), 1);
+    assert_eq!(
+        loaded.relationships[0].relationship_type,
+        tally::model::RelationshipType::RelatedTo
+    );
+    assert!(loaded.suppression.is_some());
+    assert_eq!(
+        loaded.suppression.as_ref().expect("suppression").reason,
+        "Known issue"
+    );
+}
+
+#[test]
+fn save_finding_with_unicode_title() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    let uuid = Uuid::now_v7();
+    let mut finding = make_test_finding(uuid);
+    finding.title =
+        "Unicode test: \u{1F600} \u{00E9}\u{00E8}\u{00EA} \u{4E16}\u{754C}\nnewline".to_string();
+
+    store.save_finding(&finding).expect("save");
+    let loaded = store.load_finding(&uuid).expect("load");
+
+    assert_eq!(
+        loaded.title, finding.title,
+        "unicode title should roundtrip correctly"
+    );
+}
+
+// =============================================================================
+// schema.json test
+// =============================================================================
+
+#[test]
+fn init_schema_json_has_correct_fields() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    // Read schema.json from the branch tree
+    let repo = Repository::open(&repo_path).expect("open repo");
+    let branch = repo
+        .find_branch("findings-data", BranchType::Local)
+        .expect("find branch");
+    let commit = branch.into_reference().peel_to_commit().expect("commit");
+    let tree = commit.tree().expect("tree");
+    let entry = tree
+        .get_name("schema.json")
+        .expect("schema.json should exist");
+    let blob = repo.find_blob(entry.id()).expect("blob");
+    let content: serde_json::Value =
+        serde_json::from_slice(blob.content()).expect("parse schema.json");
+
+    assert!(
+        content.get("version").is_some(),
+        "schema.json should have 'version' field"
+    );
+    assert!(
+        content.get("format").is_some(),
+        "schema.json should have 'format' field"
+    );
+    assert!(
+        content.get("created_at").is_some(),
+        "schema.json should have 'created_at' field"
+    );
+}
+
 #[test]
 fn rebuild_index_creates_index_json() {
     let (_tmp, repo_path) = setup_repo();

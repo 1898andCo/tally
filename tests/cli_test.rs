@@ -1074,3 +1074,698 @@ fn cli_all_relationship_types_parse() {
         assert!(result.is_ok(), "should parse relationship type: {rel_type}");
     }
 }
+
+// =============================================================================
+// Record with new fields
+// =============================================================================
+
+#[test]
+fn cli_record_with_category() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/auth.rs",
+            "--line",
+            "10",
+            "--severity",
+            "critical",
+            "--title",
+            "missing auth check",
+            "--rule",
+            "auth-check",
+            "--category",
+            "auth",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"category\": \"auth\""),
+        "query output should contain category field: {stdout}"
+    );
+}
+
+#[test]
+fn cli_record_with_suggested_fix() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "10",
+            "--severity",
+            "suggestion",
+            "--title",
+            "use ? operator",
+            "--rule",
+            "error-handling",
+            "--suggested-fix",
+            "use ? operator",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("use ? operator"),
+        "query output should contain suggested_fix: {stdout}"
+    );
+}
+
+#[test]
+fn cli_record_with_evidence() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "important",
+            "--title",
+            "unwrap usage",
+            "--rule",
+            "unsafe-unwrap",
+            "--evidence",
+            "line 42: unwrap()",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("line 42: unwrap()"),
+        "query output should contain evidence: {stdout}"
+    );
+}
+
+// =============================================================================
+// Suppress tests
+// =============================================================================
+
+#[test]
+fn cli_suppress_with_expiry() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "1",
+            "--severity",
+            "suggestion",
+            "--title",
+            "minor issue",
+            "--rule",
+            "minor",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("parse");
+    let uuid = json["uuid"].as_str().expect("uuid");
+
+    tally()
+        .args([
+            "suppress",
+            uuid,
+            "--reason",
+            "not relevant now",
+            "--expires",
+            "2099-12-31T00:00:00Z",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("suppressed"));
+}
+
+#[test]
+fn cli_suppress_invalid_date() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "1",
+            "--severity",
+            "suggestion",
+            "--title",
+            "t",
+            "--rule",
+            "r",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("parse");
+    let uuid = json["uuid"].as_str().expect("uuid");
+
+    tally()
+        .args([
+            "suppress",
+            uuid,
+            "--reason",
+            "test",
+            "--expires",
+            "not-a-date",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .failure();
+}
+
+#[test]
+fn cli_suppress_file_level_type() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "1",
+            "--severity",
+            "suggestion",
+            "--title",
+            "t",
+            "--rule",
+            "r",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("parse");
+    let uuid = json["uuid"].as_str().expect("uuid");
+
+    tally()
+        .args([
+            "suppress",
+            uuid,
+            "--reason",
+            "file-level suppression",
+            "--suppression-type",
+            "file",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("suppressed"));
+
+    // Verify suppression type via query
+    let query_output = tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&query_output.stdout);
+    assert!(
+        stdout.contains("file_level"),
+        "should have file_level suppression type: {stdout}"
+    );
+}
+
+#[test]
+fn cli_suppress_inline_type_with_pattern() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "1",
+            "--severity",
+            "suggestion",
+            "--title",
+            "t",
+            "--rule",
+            "r",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("parse");
+    let uuid = json["uuid"].as_str().expect("uuid");
+
+    tally()
+        .args([
+            "suppress",
+            uuid,
+            "--reason",
+            "inline suppression",
+            "--suppression-type",
+            "inline",
+            "--suppression-pattern",
+            "tally:suppress",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("suppressed"));
+
+    let query_output = tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&query_output.stdout);
+    assert!(
+        stdout.contains("tally:suppress"),
+        "should have inline suppression pattern: {stdout}"
+    );
+}
+
+// =============================================================================
+// Query tests
+// =============================================================================
+
+#[test]
+fn cli_query_combined_filters() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Record 3 findings with different severity/file combos
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/api.rs",
+            "--line",
+            "10",
+            "--severity",
+            "critical",
+            "--title",
+            "critical api issue",
+            "--rule",
+            "r1",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/lib.rs",
+            "--line",
+            "20",
+            "--severity",
+            "critical",
+            "--title",
+            "critical lib issue",
+            "--rule",
+            "r2",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/api.rs",
+            "--line",
+            "30",
+            "--severity",
+            "suggestion",
+            "--title",
+            "suggestion api issue",
+            "--rule",
+            "r3",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Query with --severity critical --file "src/api" -> should get only "critical api issue"
+    let output = tally()
+        .args([
+            "query",
+            "--format",
+            "json",
+            "--severity",
+            "critical",
+            "--file",
+            "src/api",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("critical api issue"),
+        "should include critical api finding: {stdout}"
+    );
+    assert!(
+        !stdout.contains("critical lib issue"),
+        "should exclude lib finding: {stdout}"
+    );
+    assert!(
+        !stdout.contains("suggestion api issue"),
+        "should exclude suggestion finding: {stdout}"
+    );
+}
+
+#[test]
+fn cli_query_related_to() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Record first finding
+    let output_a = tally()
+        .args([
+            "record",
+            "--file",
+            "src/a.rs",
+            "--line",
+            "1",
+            "--severity",
+            "critical",
+            "--title",
+            "finding A",
+            "--rule",
+            "rule-a",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run");
+    let json_a: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output_a.stdout)).expect("parse");
+    let uuid_a = json_a["uuid"].as_str().expect("uuid");
+
+    // Record second finding related to first
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/b.rs",
+            "--line",
+            "2",
+            "--severity",
+            "important",
+            "--title",
+            "finding B related",
+            "--rule",
+            "rule-b",
+            "--related-to",
+            uuid_a,
+            "--relationship",
+            "blocks",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Query --related-to uuid_a should return finding B
+    let output = tally()
+        .args(["query", "--format", "json", "--related-to", uuid_a])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("finding B related"),
+        "should find related finding: {stdout}"
+    );
+}
+
+#[test]
+fn cli_stats_empty_store() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .arg("stats")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Total:       0"));
+}
+
+// =============================================================================
+// Update tests
+// =============================================================================
+
+#[test]
+fn cli_update_with_reason() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "1",
+            "--severity",
+            "important",
+            "--title",
+            "test finding",
+            "--rule",
+            "test",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("parse");
+    let uuid = json["uuid"].as_str().expect("uuid");
+
+    tally()
+        .args([
+            "update",
+            uuid,
+            "--status",
+            "acknowledged",
+            "--reason",
+            "reviewed and confirmed",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Verify state_history has the reason
+    let query_output = tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&query_output.stdout);
+    assert!(
+        stdout.contains("reviewed and confirmed"),
+        "state_history should contain the reason: {stdout}"
+    );
+}
+
+#[test]
+fn cli_update_with_commit() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "1",
+            "--severity",
+            "important",
+            "--title",
+            "test finding",
+            "--rule",
+            "test",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("parse");
+    let uuid = json["uuid"].as_str().expect("uuid");
+
+    // Transition open -> acknowledged first, then acknowledged -> in_progress with commit
+    tally()
+        .args(["update", uuid, "--status", "acknowledged"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "update",
+            uuid,
+            "--status",
+            "in_progress",
+            "--commit",
+            "abc123def456",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let query_output = tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&query_output.stdout);
+    assert!(
+        stdout.contains("abc123def456"),
+        "state_history should contain the commit SHA: {stdout}"
+    );
+}
+
+// =============================================================================
+// Rebuild Index
+// =============================================================================
+
+#[test]
+fn cli_rebuild_index() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "a.rs",
+            "--line",
+            "1",
+            "--severity",
+            "critical",
+            "--title",
+            "a",
+            "--rule",
+            "r1",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "b.rs",
+            "--line",
+            "2",
+            "--severity",
+            "suggestion",
+            "--title",
+            "b",
+            "--rule",
+            "r2",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .arg("rebuild-index")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Index rebuilt"));
+}

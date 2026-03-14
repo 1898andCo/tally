@@ -152,3 +152,41 @@ fn short_id_unknown_uuid_returns_none() {
     let mapper = SessionIdMapper::new();
     assert_eq!(mapper.short_id(&Uuid::now_v7()), None);
 }
+
+// --- Independence and case-preservation tests ---
+
+#[test]
+fn mapper_separate_instances_independent() {
+    let mut mapper_a = SessionIdMapper::new();
+    let mut mapper_b = SessionIdMapper::new();
+
+    let uuid_a = Uuid::now_v7();
+    let uuid_b = Uuid::now_v7();
+
+    let short_a = mapper_a.assign(uuid_a, Severity::Critical).to_string();
+    let short_b = mapper_b.assign(uuid_b, Severity::Critical).to_string();
+
+    // Both should get C1 since they are independent mappers
+    assert_eq!(short_a, "C1");
+    assert_eq!(short_b, "C1");
+
+    // mapper_a should not resolve mapper_b's UUID
+    assert_eq!(mapper_a.resolve("C1"), Some(uuid_a));
+    assert_eq!(mapper_b.resolve("C1"), Some(uuid_b));
+    assert_ne!(uuid_a, uuid_b, "UUIDs should differ");
+}
+
+#[test]
+fn mapper_case_preserved_in_stored_format() {
+    let mut mapper = SessionIdMapper::new();
+    let uuid = Uuid::now_v7();
+    let short = mapper.assign(uuid, Severity::Critical).to_string();
+
+    // short_id() returns uppercase "C1"
+    assert_eq!(short, "C1");
+    assert_eq!(mapper.short_id(&uuid), Some("C1"));
+
+    // resolve is case-insensitive — "c1" also works
+    assert_eq!(mapper.resolve("c1"), Some(uuid));
+    assert_eq!(mapper.resolve("C1"), Some(uuid));
+}
