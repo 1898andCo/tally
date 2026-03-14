@@ -53,7 +53,7 @@ fn cli_mcp_capabilities_lists_all() {
         .assert()
         .success()
         // Tools — dynamically reflected
-        .stdout(predicate::str::contains("Tools (11)"))
+        .stdout(predicate::str::contains("Tools (15)"))
         .stdout(predicate::str::contains("record_finding"))
         .stdout(predicate::str::contains("query_findings"))
         .stdout(predicate::str::contains("update_finding_status"))
@@ -65,6 +65,10 @@ fn cli_mcp_capabilities_lists_all() {
         .stdout(predicate::str::contains("sync_findings"))
         .stdout(predicate::str::contains("rebuild_index"))
         .stdout(predicate::str::contains("import_findings"))
+        .stdout(predicate::str::contains("update_finding"))
+        .stdout(predicate::str::contains("add_note"))
+        .stdout(predicate::str::contains("add_tag"))
+        .stdout(predicate::str::contains("remove_tag"))
         // Prompts — dynamically reflected
         .stdout(predicate::str::contains("Prompts (5)"))
         .stdout(predicate::str::contains("triage-file"))
