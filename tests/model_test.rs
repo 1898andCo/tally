@@ -122,6 +122,30 @@ fn suppressed_to_closed() {
 }
 
 #[test]
+fn deferred_can_transition_to_reopened() {
+    assert_valid(LifecycleState::Deferred, LifecycleState::Reopened);
+}
+
+#[test]
+fn suppressed_can_transition_to_reopened() {
+    assert_valid(LifecycleState::Suppressed, LifecycleState::Reopened);
+}
+
+#[test]
+fn deferred_to_reopened_to_in_progress() {
+    // Full workflow chain: deferred → reopened → in_progress
+    assert_valid(LifecycleState::Deferred, LifecycleState::Reopened);
+    assert_valid(LifecycleState::Reopened, LifecycleState::InProgress);
+}
+
+#[test]
+fn suppressed_to_reopened_to_acknowledged() {
+    // Full workflow chain: suppressed → reopened → acknowledged
+    assert_valid(LifecycleState::Suppressed, LifecycleState::Reopened);
+    assert_valid(LifecycleState::Reopened, LifecycleState::Acknowledged);
+}
+
+#[test]
 fn reopened_to_acknowledged() {
     assert_valid(LifecycleState::Reopened, LifecycleState::Acknowledged);
 }
@@ -183,6 +207,25 @@ fn resolved_to_open_invalid() {
 #[test]
 fn reopened_to_closed_invalid() {
     assert_invalid(LifecycleState::Reopened, LifecycleState::Closed);
+}
+
+#[test]
+fn deferred_cannot_transition_to_in_progress() {
+    // Must go through reopened first
+    assert_invalid(LifecycleState::Deferred, LifecycleState::InProgress);
+}
+
+#[test]
+fn suppressed_cannot_transition_to_acknowledged() {
+    // Must go through reopened first
+    assert_invalid(LifecycleState::Suppressed, LifecycleState::Acknowledged);
+}
+
+#[test]
+fn closed_still_terminal() {
+    for state in LifecycleState::all() {
+        assert_invalid(LifecycleState::Closed, *state);
+    }
 }
 
 #[test]

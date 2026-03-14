@@ -142,7 +142,7 @@ pub struct UpdateStatusInput {
     )]
     pub finding_id: String,
     #[schemars(
-        description = "Target lifecycle status. Complete state machine: Open→acknowledged/in_progress/false_positive/deferred/suppressed, Acknowledged→in_progress/false_positive/wont_fix/deferred, InProgress→resolved/wont_fix/deferred, Resolved→reopened/closed, FalsePositive→reopened/closed, WontFix→reopened/closed, Deferred→open/closed, Suppressed→open/closed, Reopened→acknowledged/in_progress, Closed→(terminal, no transitions). Invalid transitions return an error listing valid targets."
+        description = "Target lifecycle status. Complete state machine: Open→acknowledged/in_progress/false_positive/deferred/suppressed, Acknowledged→in_progress/false_positive/wont_fix/deferred, InProgress→resolved/wont_fix/deferred, Resolved→reopened/closed, FalsePositive→reopened/closed, WontFix→reopened/closed, Deferred→open/reopened/closed, Suppressed→open/reopened/closed, Reopened→acknowledged/in_progress, Closed→(terminal, no transitions). Invalid transitions return an error listing valid targets."
     )]
     pub new_status: String,
     #[schemars(

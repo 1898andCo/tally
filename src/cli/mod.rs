@@ -150,7 +150,7 @@ pub enum Command {
         limit: usize,
     },
 
-    /// Update a finding's lifecycle status. State machine: Open->acknowledged/in_progress/false_positive/deferred/suppressed, Acknowledged->in_progress/false_positive/wont_fix/deferred, InProgress->resolved/wont_fix/deferred, Resolved->reopened/closed, Reopened->acknowledged/in_progress. Closed is terminal.
+    /// Update a finding's lifecycle status. State machine: Open->acknowledged/in_progress/false_positive/deferred/suppressed, Acknowledged->in_progress/false_positive/wont_fix/deferred, InProgress->resolved/wont_fix/deferred, Resolved->reopened/closed, Deferred->open/reopened/closed, Suppressed->open/reopened/closed, Reopened->acknowledged/in_progress. Closed is terminal.
     Update {
         /// Finding UUID (or session short ID like C1, I2, S3, TD1).
         id: String,
