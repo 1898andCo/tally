@@ -152,13 +152,48 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ !contains(needs.create-release.outputs.tag, '-') }}
     steps:
-      - name: Update Homebrew tap
-        uses: mislav/bump-homebrew-formula-action@v3
-        with:
-          formula-name: tally
-          homebrew-tap: 1898andCo/homebrew-tap
-          tag-name: ${{ needs.create-release.outputs.tag }}
-          download-url: https://github.com/1898andCo/tally/archive/refs/tags/${{ needs.create-release.outputs.tag }}.tar.gz
+      - name: Compute SHA256 and update formula
         env:
-          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          tag="${{ needs.create-release.outputs.tag }}"
+          version="${tag#v}"
+          url="https://github.com/1898andCo/tally/archive/refs/tags/${tag}.tar.gz"
+
+          # Download tarball and compute SHA-256
+          sha256=$(curl -sL "$url" | sha256sum | cut -d' ' -f1)
+          echo "SHA256: ${sha256}"
+
+          # Generate updated formula
+          cat > /tmp/tally.rb <<FORMULA
+          class Tally < Formula
+            desc "Git-backed findings tracker for AI coding agents"
+            homepage "https://github.com/1898andCo/tally"
+            url "${url}"
+            sha256 "${sha256}"
+            license "Apache-2.0"
+            head "https://github.com/1898andCo/tally.git", branch: "develop"
+
+            depends_on "rust" => :build
+
+            def install
+              system "cargo", "install", *std_cargo_args
+            end
+
+            test do
+              system "#{bin}/tally", "--version"
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' /tmp/tally.rb
+
+          # Push to homebrew-tap via GitHub API
+          existing_sha=$(gh api repos/1898andCo/homebrew-tap/contents/Formula/tally.rb --jq '.sha')
+          gh api repos/1898andCo/homebrew-tap/contents/Formula/tally.rb \
+            -X PUT \
+            --field message="tally ${version}" \
+            --field content="$(base64 -w0 /tmp/tally.rb)" \
+            --field sha="$existing_sha"
         continue-on-error: true
