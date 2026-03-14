@@ -4,15 +4,20 @@
 //! This is safe — each call is independent and git2 handles file locking internally.
 
 use chrono::Utc;
+use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     Annotated, CallToolResult, Content, ErrorCode, Implementation, ListResourceTemplatesResult,
-    ListResourcesResult, ProtocolVersion, RawResource, RawResourceTemplate,
-    ReadResourceRequestParam, ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo,
+    ListResourcesResult, PromptMessage, PromptMessageRole, ProtocolVersion, RawResource,
+    RawResourceTemplate, ReadResourceRequestParam, ReadResourceResult, ResourceContents,
+    ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
-use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::{
+    ErrorData as McpError, RoleServer, ServerHandler, prompt, prompt_router, tool, tool_handler,
+    tool_router,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -29,6 +34,7 @@ use crate::storage::GitFindingsStore;
 pub struct TallyMcpServer {
     repo_path: String,
     tool_router: ToolRouter<Self>,
+    prompt_router: PromptRouter<Self>,
 }
 
 // --- Input Types ---
@@ -192,15 +198,15 @@ struct ToolOutput {
     expires_at: Option<String>,
 }
 
-// --- Tool Implementations ---
+// --- Constructor ---
 
-#[tool_router]
 impl TallyMcpServer {
     #[must_use]
     pub fn new(repo_path: String) -> Self {
         Self {
             repo_path,
             tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
         }
     }
 
@@ -217,7 +223,12 @@ impl TallyMcpServer {
             data: None,
         })
     }
+}
 
+// --- Tool Implementations ---
+
+#[tool_router]
+impl TallyMcpServer {
     #[tool(
         description = "Record a code finding with stable identity. If the same file+line+rule was already recorded, returns the existing UUID (dedup). If a similar finding exists nearby (within 5 lines, same rule), creates a new finding linked as related. Returns JSON with status (created/deduplicated), uuid, and optional related_to/distance."
     )]
@@ -570,6 +581,158 @@ impl TallyMcpServer {
     }
 }
 
+// --- Prompt Implementations ---
+
+/// Arguments for the triage-file prompt.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TriageFileArgs {
+    #[schemars(description = "File path to triage findings for")]
+    pub file_path: String,
+}
+
+/// Arguments for the fix-finding prompt.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FixFindingArgs {
+    #[schemars(description = "Finding ID (UUID or short ID like C1)")]
+    pub finding_id: String,
+}
+
+/// Arguments for the explain-finding prompt.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExplainFindingArgs {
+    #[schemars(description = "Finding ID (UUID or short ID like C1)")]
+    pub finding_id: String,
+}
+
+#[prompt_router]
+impl TallyMcpServer {
+    /// Triage all findings in a specific file — classify priority and suggest fix order.
+    #[prompt(
+        name = "triage-file",
+        description = "Load all findings for a file and ask the AI to classify priority, assess impact, and suggest a fix order"
+    )]
+    pub async fn triage_file(
+        &self,
+        Parameters(args): Parameters<TriageFileArgs>,
+    ) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let findings_json = read_resource_file(&store, &args.file_path)?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here are all the findings for `{}`:\n\n```json\n{findings_json}\n```\n\n\
+                 Please triage these findings:\n\
+                 1. Classify each by priority (fix now, fix soon, defer, ignore)\n\
+                 2. Assess the impact of each finding\n\
+                 3. Suggest an optimal fix order (dependencies, quick wins first)\n\
+                 4. For each \"fix now\" finding, provide a brief remediation approach",
+                args.file_path
+            ),
+        )])
+    }
+
+    /// Generate a code fix for a specific finding.
+    #[prompt(
+        name = "fix-finding",
+        description = "Load a finding's details and ask the AI to generate a concrete code fix"
+    )]
+    pub async fn fix_finding(
+        &self,
+        Parameters(args): Parameters<FixFindingArgs>,
+    ) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let finding_json = read_resource_detail(&store, &args.finding_id)?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here is a code finding that needs to be fixed:\n\n\
+                 ```json\n{finding_json}\n```\n\n\
+                 Please:\n\
+                 1. Explain what the issue is and why it matters\n\
+                 2. Show the exact code change needed to fix it\n\
+                 3. Explain any edge cases or risks with the fix\n\
+                 4. Suggest a test to verify the fix"
+            ),
+        )])
+    }
+
+    /// Summarize all findings for a stakeholder-ready report.
+    #[prompt(
+        name = "summarize-findings",
+        description = "Load the findings summary and generate a stakeholder-ready report with counts, trends, and recommendations"
+    )]
+    pub async fn summarize_findings(&self) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let summary_json = read_resource_summary(&store)?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here is the current findings summary:\n\n\
+                 ```json\n{summary_json}\n```\n\n\
+                 Please create a concise stakeholder-ready report that includes:\n\
+                 1. Executive summary (1-2 sentences on overall code health)\n\
+                 2. Breakdown by severity with counts\n\
+                 3. Top 3 most critical findings that need immediate attention\n\
+                 4. Recommendations for the team"
+            ),
+        )])
+    }
+
+    /// Generate a PR review comment from open findings.
+    #[prompt(
+        name = "review-pr",
+        description = "Load all open findings and generate a structured PR review comment"
+    )]
+    pub async fn review_pr(&self) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let open_json = read_resource_by_status(&store, "open")?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here are all open findings in this repository:\n\n\
+                 ```json\n{open_json}\n```\n\n\
+                 Please write a PR review comment that:\n\
+                 1. Lists critical and important findings as blocking issues\n\
+                 2. Lists suggestions as non-blocking recommendations\n\
+                 3. Groups findings by file for easy navigation\n\
+                 4. Uses a professional, constructive tone\n\
+                 5. Formats as a GitHub PR review comment with markdown"
+            ),
+        )])
+    }
+
+    /// Explain a finding's impact and context.
+    #[prompt(
+        name = "explain-finding",
+        description = "Load a finding's details and ask the AI to explain the issue, its security/quality impact, and real-world consequences"
+    )]
+    pub async fn explain_finding(
+        &self,
+        Parameters(args): Parameters<ExplainFindingArgs>,
+    ) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let finding_json = read_resource_detail(&store, &args.finding_id)?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here is a code finding:\n\n\
+                 ```json\n{finding_json}\n```\n\n\
+                 Please explain:\n\
+                 1. What this issue is in plain language\n\
+                 2. Why it matters (security, reliability, maintainability)\n\
+                 3. What could happen if left unfixed (real-world consequences)\n\
+                 4. How common this type of issue is\n\
+                 5. Whether this is a false positive or a genuine concern"
+            ),
+        )])
+    }
+}
+
 #[tool_handler]
 impl ServerHandler for TallyMcpServer {
     fn get_info(&self) -> ServerInfo {
@@ -578,6 +741,7 @@ impl ServerHandler for TallyMcpServer {
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
+                .enable_prompts()
                 .build(),
             server_info: Implementation {
                 name: "tally".into(),
@@ -588,6 +752,32 @@ impl ServerHandler for TallyMcpServer {
             },
             instructions: Some("tally — persistent findings tracker backed by git. Use record_finding when you discover an issue in code. Use query_findings to check existing findings before recording (avoids duplicates). Use update_finding_status to track progress (open→in_progress→resolved→closed). Findings persist across sessions with stable UUIDs. Short IDs (C1, I2, S3) are accepted anywhere a UUID is expected. Severity levels: critical, important, suggestion, tech_debt.".into()),
         }
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListPromptsResult, McpError> {
+        let prompts = self.prompt_router.list_all();
+        Ok(rmcp::model::ListPromptsResult {
+            next_cursor: None,
+            prompts,
+        })
+    }
+
+    async fn get_prompt(
+        &self,
+        request: rmcp::model::GetPromptRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::GetPromptResult, McpError> {
+        let prompt_context = rmcp::handler::server::prompt::PromptContext::new(
+            self,
+            request.name,
+            request.arguments,
+            context,
+        );
+        self.prompt_router.get_prompt(prompt_context).await
     }
 
     async fn list_resources(
