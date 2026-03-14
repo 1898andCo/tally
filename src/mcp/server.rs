@@ -47,18 +47,22 @@ pub struct RecordFindingInput {
     pub line_start: u32,
     #[schemars(description = "End line number (defaults to line_start for single-line findings)")]
     pub line_end: Option<u32>,
-    #[schemars(description = "Severity level. One of: critical, important, suggestion, tech_debt")]
+    #[schemars(
+        description = "Severity level. One of: critical, important, suggestion, tech_debt. Critical and important block PR approval; suggestion and tech_debt are advisory."
+    )]
     pub severity: String,
     #[schemars(description = "Concise title summarizing the issue (e.g., 'unwrap on user input')")]
     pub title: String,
     #[schemars(
-        description = "Rule identifier for grouping related findings (e.g., unsafe-unwrap, sql-injection, missing-test)"
+        description = "Rule identifier for grouping related findings across files and PRs (e.g., unsafe-unwrap, sql-injection, missing-test, pattern-break). Findings with the same rule_id + file + line are deduplicated."
     )]
     pub rule_id: String,
-    #[schemars(description = "Detailed explanation of the issue and why it matters")]
+    #[schemars(
+        description = "Detailed explanation of the issue, why it matters, and what could go wrong if left unfixed"
+    )]
     pub description: Option<String>,
     #[schemars(
-        description = "Your agent identifier for provenance tracking (e.g., claude-code, cursor)"
+        description = "Your agent identifier for provenance tracking (e.g., dclaude:security-reviewer, claude-code, cursor). Use format 'tool:agent-name' for multi-agent systems."
     )]
     pub agent: Option<String>,
     #[schemars(
@@ -67,8 +71,34 @@ pub struct RecordFindingInput {
     pub locations: Option<Vec<LocationInput>>,
     #[schemars(description = "Recommended fix or remediation steps")]
     pub suggested_fix: Option<String>,
-    #[schemars(description = "Evidence supporting the finding (e.g., code snippet, stack trace)")]
+    #[schemars(
+        description = "Evidence supporting the finding (e.g., code snippet, stack trace, config value)"
+    )]
     pub evidence: Option<String>,
+    #[schemars(
+        description = "Category for grouping findings by domain (e.g., injection, auth, pattern-break, missing-test, spec-drift). Distinct from rule_id — category is the broad class, rule_id is the specific check."
+    )]
+    pub category: Option<String>,
+    #[schemars(
+        description = "Tags for filtering and trend analysis (e.g., [\"pr-review\", \"sweep\", \"adaptive-scan\"]). Comma-separated strings."
+    )]
+    pub tags: Option<Vec<String>>,
+    #[schemars(
+        description = "PR number where this finding was discovered (e.g., 42). Enables cross-PR tracking and dedup."
+    )]
+    pub pr_number: Option<u64>,
+    #[schemars(
+        description = "Session identifier to group findings from the same review session (e.g., a PR review pass ID or timestamp)"
+    )]
+    pub session_id: Option<String>,
+    #[schemars(
+        description = "Related finding ID (UUID or short ID like C1). Creates a relationship between this finding and another. Use with relationship_type."
+    )]
+    pub related_to: Option<String>,
+    #[schemars(
+        description = "Relationship type when related_to is set. One of: related_to (default), duplicate_of, blocks, causes, discovered_while_fixing, supersedes"
+    )]
+    pub relationship_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -112,15 +142,29 @@ pub struct UpdateStatusInput {
     )]
     pub finding_id: String,
     #[schemars(
-        description = "Target lifecycle status. Valid transitions depend on current state: Open can go to acknowledged/in_progress/false_positive/deferred/suppressed. InProgress can go to resolved/wont_fix/deferred. Resolved can go to reopened/closed."
+        description = "Target lifecycle status. Complete state machine: Open→acknowledged/in_progress/false_positive/deferred/suppressed, Acknowledged→in_progress/false_positive/wont_fix/deferred, InProgress→resolved/wont_fix/deferred, Resolved→reopened/closed, FalsePositive→reopened/closed, WontFix→reopened/closed, Deferred→open/closed, Suppressed→open/closed, Reopened→acknowledged/in_progress, Closed→(terminal, no transitions). Invalid transitions return an error listing valid targets."
     )]
     pub new_status: String,
     #[schemars(
-        description = "Reason for the status change (e.g., 'fixed in PR #42', 'accepted risk')"
+        description = "Reason for the status change (e.g., 'fixed in PR #42', 'accepted risk', 'deferred to next sprint')"
     )]
     pub reason: Option<String>,
-    #[schemars(description = "Your agent identifier for audit trail (e.g., claude-code, cursor)")]
+    #[schemars(
+        description = "Your agent identifier for audit trail (e.g., dclaude:pr-fix-verify, claude-code, cursor)"
+    )]
     pub agent: Option<String>,
+    #[schemars(
+        description = "Git commit SHA that fixed the finding (e.g., 'abc123'). Recorded in the state transition for traceability."
+    )]
+    pub commit_sha: Option<String>,
+    #[schemars(
+        description = "Add a relationship to another finding (UUID or short ID like C1). Creates a link between this finding and the target."
+    )]
+    pub related_to: Option<String>,
+    #[schemars(
+        description = "Relationship type when related_to is set. One of: related_to (default), duplicate_of, blocks, causes, discovered_while_fixing, supersedes"
+    )]
+    pub relationship: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -138,15 +182,25 @@ pub struct SuppressFindingInput {
     )]
     pub finding_id: String,
     #[schemars(
-        description = "Why this finding should be suppressed (e.g., 'accepted risk', 'false positive in test code')"
+        description = "Why this finding should be suppressed (e.g., 'accepted risk', 'false positive in test code', 'known spec conflict')"
     )]
     pub reason: String,
     #[schemars(
         description = "ISO 8601 expiry date after which the finding auto-reopens (e.g., 2026-06-01T00:00:00Z). Omit for permanent suppression."
     )]
     pub expires_at: Option<String>,
-    #[schemars(description = "Your agent identifier for audit trail (e.g., claude-code, cursor)")]
+    #[schemars(
+        description = "Your agent identifier for audit trail (e.g., dclaude:check-drift, claude-code)"
+    )]
     pub agent: Option<String>,
+    #[schemars(
+        description = "Suppression scope. One of: global (suppress everywhere, default), file (suppress only in this file), inline (suppress at specific code pattern)"
+    )]
+    pub suppression_type: Option<String>,
+    #[schemars(
+        description = "Code pattern for inline suppression (used with suppression_type='inline'). Matches against source lines to auto-suppress. Example: 'tally:suppress unsafe-unwrap'"
+    )]
+    pub suppression_pattern: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -157,6 +211,12 @@ pub struct RecordBatchInput {
     pub findings: Vec<BatchFindingInput>,
     #[schemars(description = "Your agent identifier applied to all findings in the batch")]
     pub agent: Option<String>,
+    #[schemars(
+        description = "PR number applied to all findings in the batch (can be overridden per finding)"
+    )]
+    pub pr_number: Option<u64>,
+    #[schemars(description = "Session identifier applied to all findings in the batch")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -179,6 +239,16 @@ pub struct BatchFindingInput {
     pub suggested_fix: Option<String>,
     #[schemars(description = "Evidence supporting the finding (e.g., code snippet)")]
     pub evidence: Option<String>,
+    #[schemars(
+        description = "Category for grouping by domain (e.g., injection, auth, pattern-break)"
+    )]
+    pub category: Option<String>,
+    #[schemars(description = "Tags for filtering (e.g., [\"pr-review\", \"sweep\"])")]
+    pub tags: Option<Vec<String>>,
+    #[schemars(description = "PR number where this finding was discovered")]
+    pub pr_number: Option<u64>,
+    #[schemars(description = "Session identifier to group findings from the same review session")]
+    pub session_id: Option<String>,
 }
 
 // --- Output Type ---
@@ -342,7 +412,7 @@ impl TallyMcpServer {
             },
             IdentityResolution::RelatedFinding { uuid, distance } => {
                 let new_uuid = Uuid::now_v7();
-                let finding = build_finding(
+                let mut finding = build_finding(
                     new_uuid,
                     fingerprint,
                     &input,
@@ -350,6 +420,12 @@ impl TallyMcpServer {
                     locations,
                     agent,
                     &ctx,
+                );
+                add_input_relationship(
+                    &store,
+                    &mut finding,
+                    input.related_to.as_ref(),
+                    input.relationship_type.as_ref(),
                 );
                 store.save_finding(&finding).map_err(to_mcp_err)?;
                 ToolOutput {
@@ -363,7 +439,7 @@ impl TallyMcpServer {
             }
             IdentityResolution::NewFinding => {
                 let new_uuid = Uuid::now_v7();
-                let finding = build_finding(
+                let mut finding = build_finding(
                     new_uuid,
                     fingerprint,
                     &input,
@@ -371,6 +447,12 @@ impl TallyMcpServer {
                     locations,
                     agent,
                     &ctx,
+                );
+                add_input_relationship(
+                    &store,
+                    &mut finding,
+                    input.related_to.as_ref(),
+                    input.relationship_type.as_ref(),
                 );
                 store.save_finding(&finding).map_err(to_mcp_err)?;
                 ToolOutput {
@@ -471,10 +553,31 @@ impl TallyMcpServer {
             timestamp: Utc::now(),
             agent_id: input.agent.unwrap_or_else(|| "mcp-client".into()),
             reason: input.reason,
-            commit_sha: None,
+            commit_sha: input.commit_sha,
         });
         finding.status = new_status;
         finding.updated_at = Utc::now();
+
+        // Add explicit relationship if requested
+        if let Some(ref related_id) = input.related_to {
+            if let Ok(related_uuid) = resolve_id_mcp(&store, related_id) {
+                let rel_type = input
+                    .relationship
+                    .as_deref()
+                    .unwrap_or("related_to")
+                    .parse()
+                    .unwrap_or(crate::model::RelationshipType::RelatedTo);
+                finding
+                    .relationships
+                    .push(crate::model::FindingRelationship {
+                        related_finding_id: related_uuid,
+                        relationship_type: rel_type,
+                        reason: None,
+                        created_at: Utc::now(),
+                    });
+            }
+        }
+
         store.save_finding(&finding).map_err(to_mcp_err)?;
 
         Ok(CallToolResult::success(vec![Content::text(
@@ -524,9 +627,12 @@ impl TallyMcpServer {
         let mut failed = 0u32;
         let mut results: Vec<serde_json::Value> = Vec::new();
 
+        let batch_pr = input.pr_number;
+        let batch_session = input.session_id.as_deref();
+
         for (idx, entry) in input.findings.iter().enumerate() {
             total += 1;
-            match record_batch_entry(&store, &resolver, entry, agent) {
+            match record_batch_entry(&store, &resolver, entry, agent, batch_pr, batch_session) {
                 Ok(result) => {
                     succeeded += 1;
                     results
@@ -591,12 +697,26 @@ impl TallyMcpServer {
             reason: Some(input.reason.clone()),
             commit_sha: None,
         });
+        let sup_type =
+            input
+                .suppression_type
+                .as_deref()
+                .map_or(SuppressionType::Global, |s| {
+                    match s.to_ascii_lowercase().as_str() {
+                        "file" => SuppressionType::FileLevel,
+                        "inline" => SuppressionType::InlineComment {
+                            pattern: input.suppression_pattern.clone().unwrap_or_default(),
+                        },
+                        _ => SuppressionType::Global,
+                    }
+                });
+
         finding.status = LifecycleState::Suppressed;
         finding.suppression = Some(Suppression {
             suppressed_at: Utc::now(),
             reason: input.reason,
             expires_at,
-            suppression_type: SuppressionType::Global,
+            suppression_type: sup_type,
         });
         finding.updated_at = Utc::now();
         store.save_finding(&finding).map_err(to_mcp_err)?;
@@ -1240,6 +1360,8 @@ fn record_batch_entry(
     resolver: &FindingIdentityResolver,
     entry: &BatchFindingInput,
     agent: &str,
+    batch_pr_number: Option<u64>,
+    session_id: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     let severity: Severity = entry.severity.parse().map_err(|e: String| e)?;
 
@@ -1273,8 +1395,8 @@ fn record_batch_entry(
                 rule_id: entry.rule_id.clone(),
                 locations: vec![location],
                 severity,
-                category: String::new(),
-                tags: vec![],
+                category: entry.category.clone().unwrap_or_default(),
+                tags: entry.tags.clone().unwrap_or_default(),
                 title: entry.title.clone(),
                 description: entry.description.clone().unwrap_or_default(),
                 suggested_fix: entry.suggested_fix.clone(),
@@ -1283,7 +1405,7 @@ fn record_batch_entry(
                 state_history: vec![],
                 discovered_by: vec![AgentRecord {
                     agent_id: agent.to_string(),
-                    session_id: String::new(),
+                    session_id: session_id.unwrap_or_default().to_string(),
                     detected_at: Utc::now(),
                     session_short_id: None,
                 }],
@@ -1291,7 +1413,7 @@ fn record_batch_entry(
                 updated_at: Utc::now(),
                 repo_id: String::new(),
                 branch: None,
-                pr_number: None,
+                pr_number: entry.pr_number.or(batch_pr_number),
                 commit_sha: None,
                 relationships: vec![],
                 suppression: None,
@@ -1318,8 +1440,8 @@ fn build_finding(
         rule_id: input.rule_id.clone(),
         locations,
         severity,
-        category: String::new(),
-        tags: vec![],
+        category: input.category.clone().unwrap_or_default(),
+        tags: input.tags.clone().unwrap_or_default(),
         title: input.title.clone(),
         description: input.description.clone().unwrap_or_default(),
         suggested_fix: input.suggested_fix.clone(),
@@ -1328,7 +1450,7 @@ fn build_finding(
         state_history: vec![],
         discovered_by: vec![AgentRecord {
             agent_id: agent.to_string(),
-            session_id: String::new(),
+            session_id: input.session_id.clone().unwrap_or_default(),
             detected_at: Utc::now(),
             session_short_id: None,
         }],
@@ -1336,10 +1458,35 @@ fn build_finding(
         updated_at: Utc::now(),
         repo_id: ctx.repo_id.clone(),
         branch: ctx.branch.clone(),
-        pr_number: None,
+        pr_number: input.pr_number,
         commit_sha: ctx.commit_sha.clone(),
         relationships: vec![],
         suppression: None,
+    }
+}
+
+/// Add a relationship from input fields if provided.
+fn add_input_relationship(
+    store: &GitFindingsStore,
+    finding: &mut Finding,
+    related_to: Option<&String>,
+    relationship_type: Option<&String>,
+) {
+    if let Some(related_id) = related_to {
+        if let Ok(related_uuid) = resolve_id_mcp(store, related_id) {
+            let rel_type = relationship_type
+                .map_or("related_to", |s| s.as_str())
+                .parse()
+                .unwrap_or(crate::model::RelationshipType::RelatedTo);
+            finding
+                .relationships
+                .push(crate::model::FindingRelationship {
+                    related_finding_id: related_uuid,
+                    relationship_type: rel_type,
+                    reason: None,
+                    created_at: Utc::now(),
+                });
+        }
     }
 }
 
