@@ -489,6 +489,98 @@ fn cli_record_batch_empty_file() {
 }
 
 #[test]
+fn cli_import_dclaude_format() {
+    let tmp = setup_cli_repo();
+    tally().arg("init").current_dir(tmp.path()).assert().success();
+
+    // Create a mock dclaude state file
+    let state_file = tmp.path().join("pr-review.json");
+    std::fs::write(
+        &state_file,
+        r#"{
+  "active_cycle": {
+    "findings": [
+      {"id": "C1", "severity": "critical", "title": "SQL injection", "file": "src/api.rs", "lines": [42], "category": "injection", "status": "pending"},
+      {"id": "I1", "severity": "important", "title": "Missing auth", "file": "src/routes.rs", "lines": [10], "category": "auth", "status": "verified"}
+    ]
+  }
+}"#,
+    )
+    .expect("write state file");
+
+    tally()
+        .args(["import", state_file.to_str().expect("path")])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("2 imported"));
+
+    // Verify findings were imported
+    tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SQL injection"))
+        .stdout(predicate::str::contains("Missing auth"));
+}
+
+#[test]
+fn cli_import_zclaude_format() {
+    let tmp = setup_cli_repo();
+    tally().arg("init").current_dir(tmp.path()).assert().success();
+
+    let state_file = tmp.path().join("zclaude-review.json");
+    std::fs::write(
+        &state_file,
+        r#"{
+  "reviews": [
+    {
+      "findings": [
+        {"id": "S1", "severity": "suggestion", "title": "Missing test", "file": "src/lib.rs", "lines": [5], "status": "pending"}
+      ]
+    }
+  ]
+}"#,
+    )
+    .expect("write");
+
+    tally()
+        .args(["import", state_file.to_str().expect("path")])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("1 imported"));
+}
+
+#[test]
+fn cli_import_empty_file_no_error() {
+    let tmp = setup_cli_repo();
+    tally().arg("init").current_dir(tmp.path()).assert().success();
+
+    let state_file = tmp.path().join("empty.json");
+    std::fs::write(&state_file, "{}").expect("write");
+
+    tally()
+        .args(["import", state_file.to_str().expect("path")])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("No findings found"));
+}
+
+#[test]
+fn cli_sync_before_init_fails() {
+    let tmp = setup_cli_repo();
+    // No init
+    tally()
+        .args(["sync"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure();
+}
+
+#[test]
 fn cli_outside_git_repo_fails() {
     let tmp = tempfile::tempdir().expect("tempdir");
     // No git init — just an empty directory

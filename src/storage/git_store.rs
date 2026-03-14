@@ -28,6 +28,17 @@ const FINDINGS_DIR: &str = "findings";
 /// Max retry attempts for ref lock contention.
 const MAX_LOCK_RETRIES: u32 = 3;
 
+/// Result of a sync operation.
+#[derive(Debug)]
+pub struct SyncResult {
+    /// Whether remote data was fetched.
+    pub fetched: bool,
+    /// Whether a merge was performed.
+    pub merged: bool,
+    /// Whether local data was pushed.
+    pub pushed: bool,
+}
+
 /// Git-backed findings store.
 pub struct GitFindingsStore {
     repo: Repository,
@@ -189,6 +200,137 @@ impl GitFindingsStore {
         self.repo
             .find_branch(&self.branch_name, BranchType::Local)
             .is_ok()
+    }
+
+    /// Sync the findings branch with the remote (fetch + merge + push).
+    ///
+    /// Fetches the remote findings-data branch, fast-forward merges if possible,
+    /// then pushes local changes. Retries push on non-fast-forward (up to 3 attempts
+    /// with fetch+merge between retries).
+    ///
+    /// # Errors
+    ///
+    /// Returns `TallyError::Git` if remote operations fail (auth, network, etc.).
+    /// Returns `TallyError::BranchNotFound` if the local branch doesn't exist.
+    pub fn sync(&self, remote_name: &str) -> Result<SyncResult> {
+        if !self.branch_exists() {
+            return Err(TallyError::BranchNotFound {
+                branch: self.branch_name.clone(),
+            });
+        }
+
+        let ref_name = format!("refs/heads/{}", self.branch_name);
+        let remote_ref = format!("refs/remotes/{}/{}", remote_name, self.branch_name);
+
+        // Fetch the remote branch
+        let mut remote = self.repo.find_remote(remote_name)?;
+        remote.fetch(&[&self.branch_name], None, None)?;
+
+        // Check if remote branch exists
+        let remote_commit = match self.repo.find_reference(&remote_ref) {
+            Ok(reference) => Some(reference.peel_to_commit()?),
+            Err(_) => None, // Remote branch doesn't exist yet — first push
+        };
+
+        let local_commit = self.branch_tip()?;
+
+        // Merge remote into local (fast-forward if possible)
+        let mut merged = false;
+        if let Some(ref remote_commit) = remote_commit {
+            if remote_commit.id() != local_commit.id() {
+                // Check if local is ancestor of remote (remote is ahead — fast-forward)
+                if self.repo.graph_descendant_of(remote_commit.id(), local_commit.id())? {
+                    // Fast-forward local to remote
+                    self.repo.reference(
+                        &ref_name,
+                        remote_commit.id(),
+                        true,
+                        "tally sync: fast-forward to remote",
+                    )?;
+                    eprintln!(
+                        "Fast-forwarded {} to {}",
+                        self.branch_name,
+                        &remote_commit.id().to_string()[..8]
+                    );
+                    merged = true;
+                } else if self.repo.graph_descendant_of(local_commit.id(), remote_commit.id())? {
+                    // Local is ahead of remote — just push
+                    eprintln!("Local is ahead of remote — pushing.");
+                } else {
+                    // Diverged — one-file-per-finding means git merge should auto-resolve
+                    eprintln!(
+                        "Branches diverged — merging (one-file-per-finding should auto-resolve)."
+                    );
+                    let merge_base = self
+                        .repo
+                        .merge_base(local_commit.id(), remote_commit.id())?;
+                    let base_commit = self.repo.find_commit(merge_base)?;
+
+                    let base_tree = base_commit.tree()?;
+                    let local_tree = local_commit.tree()?;
+                    let remote_tree = remote_commit.tree()?;
+
+                    let mut merge_index =
+                        self.repo
+                            .merge_trees(&base_tree, &local_tree, &remote_tree, None)?;
+
+                    if merge_index.has_conflicts() {
+                        return Err(TallyError::Git(git2::Error::from_str(
+                            "Merge conflict on findings-data branch. \
+                             This should not happen with one-file-per-finding. \
+                             Resolve manually with: git checkout findings-data && git merge origin/findings-data",
+                        )));
+                    }
+
+                    let merged_tree_oid = merge_index.write_tree_to(&self.repo)?;
+                    let merged_tree = self.repo.find_tree(merged_tree_oid)?;
+                    let sig = self.signature()?;
+
+                    let merge_commit = self.repo.commit(
+                        Some(&ref_name),
+                        &sig,
+                        &sig,
+                        "tally sync: merge remote findings",
+                        &merged_tree,
+                        &[&local_commit, remote_commit],
+                    )?;
+                    eprintln!("Merged remote changes: {}", &merge_commit.to_string()[..8]);
+                    merged = true;
+                }
+            }
+        }
+
+        // Push with retry
+        for attempt in 0..MAX_LOCK_RETRIES {
+            let mut push_remote = self.repo.find_remote(remote_name)?;
+            match push_remote.push(&[&format!("{ref_name}:{ref_name}")], None) {
+                Ok(()) => {
+                    return Ok(SyncResult {
+                        fetched: remote_commit.is_some(),
+                        merged,
+                        pushed: true,
+                    });
+                }
+                Err(e) if attempt < MAX_LOCK_RETRIES - 1 => {
+                    let delay = Duration::from_millis(100 * u64::from(2_u32.pow(attempt)));
+                    eprintln!(
+                        "Push failed ({}), retry {}/{} after {}ms",
+                        e,
+                        attempt + 1,
+                        MAX_LOCK_RETRIES,
+                        delay.as_millis()
+                    );
+                    thread::sleep(delay);
+
+                    // Re-fetch and try to merge again before retry
+                    let mut fetch_remote = self.repo.find_remote(remote_name)?;
+                    fetch_remote.fetch(&[&self.branch_name], None, None)?;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        unreachable!("retry loop should have returned")
     }
 
     // --- Private helpers ---

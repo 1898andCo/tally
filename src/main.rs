@@ -57,6 +57,8 @@ fn run(cli: Cli) -> tally::error::Result<()> {
         Command::Export { format, output } => {
             handlers::handle_export(&store()?, format, output.as_deref())
         }
+        Command::Sync { remote } => handlers::handle_sync(&store()?, &remote),
+        Command::Import { path } => handlers::handle_import(&store()?, &path),
         Command::Stats => handlers::handle_stats(&store()?),
         Command::McpServer => {
             let rt = tokio::runtime::Runtime::new().map_err(tally::error::TallyError::Io)?;

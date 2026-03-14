@@ -149,6 +149,19 @@ pub enum Command {
         output: Option<String>,
     },
 
+    /// Sync findings with remote (fetch + merge + push).
+    Sync {
+        /// Remote name.
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
+
+    /// Import findings from dclaude/zclaude state files.
+    Import {
+        /// Path to the state JSON file.
+        path: String,
+    },
+
     /// Show summary statistics.
     Stats,
 
