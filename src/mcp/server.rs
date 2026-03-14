@@ -216,6 +216,18 @@ impl TallyMcpServer {
         &self.repo_path
     }
 
+    /// List all registered MCP tools (reflected from the tool router).
+    #[must_use]
+    pub fn list_tools(&self) -> Vec<rmcp::model::Tool> {
+        self.tool_router.list_all()
+    }
+
+    /// List all registered MCP prompts (reflected from the prompt router).
+    #[must_use]
+    pub fn list_prompts(&self) -> Vec<rmcp::model::Prompt> {
+        self.prompt_router.list_all()
+    }
+
     fn store(&self) -> Result<GitFindingsStore, McpError> {
         GitFindingsStore::open(&self.repo_path).map_err(|e| McpError {
             code: ErrorCode(-1),
