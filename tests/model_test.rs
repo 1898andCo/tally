@@ -549,8 +549,8 @@ fn finding_deserialize_missing_fields_uses_defaults() {
     let finding = result.expect("should deserialize");
     assert!(finding.uuid.is_nil(), "default uuid should be nil");
     assert_eq!(
-        finding.schema_version, "1.0.0",
-        "schema_version should default to 1.0.0"
+        finding.schema_version, "1.1.0",
+        "schema_version should default to current version"
     );
 }
 

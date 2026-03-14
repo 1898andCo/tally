@@ -14,7 +14,7 @@ use super::state_machine::{LifecycleState, StateTransition};
 /// Default schema version for new findings.
 #[must_use]
 pub fn default_schema_version() -> String {
-    "1.0.0".to_string()
+    "1.1.0".to_string()
 }
 
 /// Default datetime for deserialization of legacy files.

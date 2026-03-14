@@ -226,6 +226,7 @@ impl GitFindingsStore {
                     "file_path": primary_file,
                     "fingerprint": f.content_fingerprint,
                     "title": f.title,
+                    "tags": f.tags,
                     "created_at": f.created_at.to_rfc3339(),
                     "updated_at": f.updated_at.to_rfc3339(),
                 })

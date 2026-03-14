@@ -65,7 +65,11 @@ pub fn export_csv(findings: &[Finding]) -> String {
     out
 }
 
+/// # Panics
+///
+/// Panics if `serde_json::json!` macro produces a non-object value (impossible by construction).
 #[must_use]
+#[allow(clippy::too_many_lines)] // SARIF construction requires inline property bag logic
 pub fn export_sarif(findings: &[Finding]) -> String {
     let rules: Vec<serde_json::Value> = findings
         .iter()
@@ -106,13 +110,58 @@ pub fn export_sarif(findings: &[Finding]) -> String {
                 })
                 .collect();
 
-            serde_json::json!({
+            let mut result = serde_json::json!({
                 "ruleId": f.rule_id,
                 "level": f.severity.to_sarif_level(),
                 "message": {"text": f.title},
                 "locations": locations,
                 "ruleIndex": rule_ids.iter().position(|r| *r == f.rule_id).unwrap_or(0),
-            })
+                "resultProvenance": {
+                    "firstDetectionTimeUtc": f.created_at.to_rfc3339(),
+                },
+            });
+
+            // Add tally-specific properties (SARIF extension via property bags)
+            let props = result
+                .as_object_mut()
+                .expect("object")
+                .entry("properties")
+                .or_insert_with(|| serde_json::json!({}));
+            if !f.notes.is_empty() {
+                props["tally_notes"] = serde_json::json!(
+                    f.notes
+                        .iter()
+                        .map(|n| serde_json::json!({
+                            "text": n.text,
+                            "timestamp": n.timestamp.to_rfc3339(),
+                            "agent_id": n.agent_id,
+                        }))
+                        .collect::<Vec<_>>()
+                );
+            }
+            if !f.edit_history.is_empty() {
+                props["tally_editHistory"] = serde_json::json!(
+                    f.edit_history
+                        .iter()
+                        .map(|e| serde_json::json!({
+                            "field": e.field,
+                            "oldValue": e.old_value,
+                            "newValue": e.new_value,
+                            "timestamp": e.timestamp.to_rfc3339(),
+                            "agent_id": e.agent_id,
+                        }))
+                        .collect::<Vec<_>>()
+                );
+            }
+            if !f.tags.is_empty() {
+                props["tally_tags"] = serde_json::json!(f.tags);
+            }
+            // Remove empty properties object
+            if props.as_object().is_some_and(serde_json::Map::is_empty) {
+                result.as_object_mut().expect("object").remove("properties");
+            }
+
+            result
         })
         .collect();
 
