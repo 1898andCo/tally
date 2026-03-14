@@ -633,6 +633,45 @@ impl ServerHandler for TallyMcpServer {
                     },
                     None,
                 ),
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://severity/{level}".into(),
+                        name: "Findings by Severity".into(),
+                        title: None,
+                        description: Some(
+                            "All findings at a severity level (critical, important, suggestion, tech_debt)"
+                                .into(),
+                        ),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://status/{status}".into(),
+                        name: "Findings by Status".into(),
+                        title: None,
+                        description: Some(
+                            "All findings with a lifecycle status (open, in_progress, resolved, etc.)"
+                                .into(),
+                        ),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://rule/{rule_id}".into(),
+                        name: "Findings by Rule".into(),
+                        title: None,
+                        description: Some(
+                            "All findings for a specific rule ID (e.g., unsafe-unwrap, sql-injection)"
+                                .into(),
+                        ),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
             ],
         })
     }
@@ -651,6 +690,12 @@ impl ServerHandler for TallyMcpServer {
             read_resource_file(&store, path)?
         } else if let Some(uuid_str) = uri.strip_prefix("findings://detail/") {
             read_resource_detail(&store, uuid_str)?
+        } else if let Some(level) = uri.strip_prefix("findings://severity/") {
+            read_resource_by_severity(&store, level)?
+        } else if let Some(status) = uri.strip_prefix("findings://status/") {
+            read_resource_by_status(&store, status)?
+        } else if let Some(rule) = uri.strip_prefix("findings://rule/") {
+            read_resource_by_rule(&store, rule)?
         } else {
             return Err(McpError {
                 code: ErrorCode::INVALID_REQUEST,
@@ -890,6 +935,65 @@ pub fn read_resource_detail(store: &GitFindingsStore, uuid_str: &str) -> Result<
     let finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
 
     serde_json::to_string_pretty(&finding).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+/// Read the `findings://severity/{level}` resource.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage or serialization fails.
+pub fn read_resource_by_severity(
+    store: &GitFindingsStore,
+    level: &str,
+) -> Result<String, McpError> {
+    let findings = store.load_all().map_err(to_mcp_err)?;
+    let matched: Vec<&Finding> = if let Ok(sev) = level.parse::<Severity>() {
+        findings.iter().filter(|f| f.severity == sev).collect()
+    } else {
+        vec![]
+    };
+    serde_json::to_string_pretty(&matched).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+/// Read the `findings://status/{status}` resource.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage or serialization fails.
+pub fn read_resource_by_status(
+    store: &GitFindingsStore,
+    status_str: &str,
+) -> Result<String, McpError> {
+    let findings = store.load_all().map_err(to_mcp_err)?;
+    let matched: Vec<&Finding> = if let Ok(status) = status_str.parse::<LifecycleState>() {
+        findings.iter().filter(|f| f.status == status).collect()
+    } else {
+        vec![]
+    };
+    serde_json::to_string_pretty(&matched).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+/// Read the `findings://rule/{rule_id}` resource.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage or serialization fails.
+pub fn read_resource_by_rule(store: &GitFindingsStore, rule_id: &str) -> Result<String, McpError> {
+    let findings = store.load_all().map_err(to_mcp_err)?;
+    let matched: Vec<&Finding> = findings.iter().filter(|f| f.rule_id == rule_id).collect();
+    serde_json::to_string_pretty(&matched).map_err(|e| McpError {
         code: ErrorCode(-1),
         message: format!("Serialization error: {e}").into(),
         data: None,
