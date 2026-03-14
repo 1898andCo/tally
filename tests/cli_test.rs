@@ -350,6 +350,145 @@ fn cli_query_table_includes_short_id_column() {
 }
 
 #[test]
+fn cli_record_batch_from_file() {
+    let tmp = setup_cli_repo();
+    tally().arg("init").current_dir(tmp.path()).assert().success();
+
+    // Create a JSONL batch file
+    let batch = tmp.path().join("batch.jsonl");
+    std::fs::write(
+        &batch,
+        r#"{"file_path":"a.rs","line_start":1,"severity":"critical","title":"finding A","rule_id":"rule-a"}
+{"file_path":"b.rs","line_start":2,"severity":"suggestion","title":"finding B","rule_id":"rule-b"}
+{"file_path":"c.rs","line_start":3,"severity":"important","title":"finding C","rule_id":"rule-c"}
+"#,
+    )
+    .expect("write batch");
+
+    tally()
+        .args(["record-batch", batch.to_str().expect("path")])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"succeeded\": 3"))
+        .stdout(predicate::str::contains("\"failed\": 0"));
+}
+
+#[test]
+fn cli_record_batch_partial_success() {
+    let tmp = setup_cli_repo();
+    tally().arg("init").current_dir(tmp.path()).assert().success();
+
+    let batch = tmp.path().join("batch.jsonl");
+    std::fs::write(
+        &batch,
+        r#"{"file_path":"a.rs","line_start":1,"severity":"critical","title":"ok","rule_id":"r"}
+{"bad json line
+{"file_path":"c.rs","line_start":3,"severity":"important","title":"ok","rule_id":"r2"}
+"#,
+    )
+    .expect("write batch");
+
+    tally()
+        .args(["record-batch", batch.to_str().expect("path")])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"succeeded\": 2"))
+        .stdout(predicate::str::contains("\"failed\": 1"));
+}
+
+#[test]
+fn cli_export_sarif() {
+    let tmp = setup_cli_repo();
+    tally().arg("init").current_dir(tmp.path()).assert().success();
+
+    tally()
+        .args([
+            "record", "--file", "src/main.rs", "--line", "42",
+            "--severity", "critical", "--title", "test", "--rule", "test-rule",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args(["export", "--format", "sarif"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"version\": \"2.1.0\""))
+        .stdout(predicate::str::contains("\"name\": \"tally\""))
+        .stdout(predicate::str::contains("test-rule"));
+}
+
+#[test]
+fn cli_export_csv() {
+    let tmp = setup_cli_repo();
+    tally().arg("init").current_dir(tmp.path()).assert().success();
+
+    tally()
+        .args([
+            "record", "--file", "src/main.rs", "--line", "42",
+            "--severity", "important", "--title", "csv test", "--rule", "csv-rule",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args(["export", "--format", "csv"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("uuid,severity,status"))
+        .stdout(predicate::str::contains("csv-rule"));
+}
+
+#[test]
+fn cli_export_to_file() {
+    let tmp = setup_cli_repo();
+    tally().arg("init").current_dir(tmp.path()).assert().success();
+
+    tally()
+        .args([
+            "record", "--file", "a.rs", "--line", "1",
+            "--severity", "suggestion", "--title", "t", "--rule", "r",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output_file = tmp.path().join("findings.json");
+    tally()
+        .args(["export", "--format", "json", "--output", output_file.to_str().expect("p")])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(&output_file).expect("read");
+    assert!(content.contains("suggestion"), "exported file should contain findings");
+}
+
+// --- Negative ---
+
+#[test]
+fn cli_record_batch_empty_file() {
+    let tmp = setup_cli_repo();
+    tally().arg("init").current_dir(tmp.path()).assert().success();
+
+    let batch = tmp.path().join("empty.jsonl");
+    std::fs::write(&batch, "").expect("write empty");
+
+    tally()
+        .args(["record-batch", batch.to_str().expect("path")])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"total\": 0"));
+}
+
+#[test]
 fn cli_outside_git_repo_fails() {
     let tmp = tempfile::tempdir().expect("tempdir");
     // No git init — just an empty directory

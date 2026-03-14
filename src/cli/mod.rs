@@ -127,6 +127,28 @@ pub enum Command {
         agent: String,
     },
 
+    /// Record multiple findings from a JSONL file or stdin.
+    RecordBatch {
+        /// Path to JSONL file. Use "-" for stdin.
+        #[arg(default_value = "-")]
+        input: String,
+
+        /// Agent identifier.
+        #[arg(long, default_value = "cli")]
+        agent: String,
+    },
+
+    /// Export findings in SARIF, CSV, or JSON format.
+    Export {
+        /// Output format.
+        #[arg(long, value_enum)]
+        format: ExportFormat,
+
+        /// Output file. Defaults to stdout.
+        #[arg(long)]
+        output: Option<String>,
+    },
+
     /// Show summary statistics.
     Stats,
 
@@ -139,4 +161,11 @@ pub enum OutputFormat {
     Json,
     Table,
     Summary,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ExportFormat {
+    Sarif,
+    Csv,
+    Json,
 }
