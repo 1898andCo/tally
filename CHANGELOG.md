@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-03-14
+
+### Documentation
+
+- *(mcp)* Improve CLI help, tool descriptions, prompts, add PR resource (#6)
+
 ## [0.3.0] - 2026-03-14
 
 ### CI/CD
@@ -10,6 +16,7 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(mcp)* Expose all Finding fields in MCP tools (#5)
 - *(mcp)* Expose all Finding fields in MCP tools (#5)
 
 ## [0.2.0] - 2026-03-14
