@@ -981,3 +981,294 @@ async fn mcp_unit_resource_detail_not_found() {
         tally::mcp::server::read_resource_detail(&store, "00000000-0000-0000-0000-000000000000");
     assert!(err.is_err(), "nonexistent UUID should error");
 }
+
+// =============================================================================
+// New resource templates: severity, status, rule
+// =============================================================================
+
+#[tokio::test]
+async fn mcp_unit_resource_by_severity() {
+    let (_tmp, server) = setup_mcp();
+    let repo_path = server.repo_path().to_string();
+
+    server
+        .record_finding(Parameters(make_record_input(
+            "a.rs", 1, "critical", "crit", "r1",
+        )))
+        .await
+        .expect("record");
+    server
+        .record_finding(Parameters(make_record_input(
+            "b.rs",
+            2,
+            "suggestion",
+            "sug",
+            "r2",
+        )))
+        .await
+        .expect("record");
+
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+
+    let result =
+        tally::mcp::server::read_resource_by_severity(&store, "critical").expect("severity");
+    let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
+    assert_eq!(findings.len(), 1);
+    assert!(findings[0]["title"].as_str().expect("t").contains("crit"));
+
+    let result =
+        tally::mcp::server::read_resource_by_severity(&store, "suggestion").expect("severity");
+    let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
+    assert_eq!(findings.len(), 1);
+
+    let result =
+        tally::mcp::server::read_resource_by_severity(&store, "invalid").expect("severity");
+    let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
+    assert_eq!(findings.len(), 0, "invalid severity returns empty");
+}
+
+#[tokio::test]
+async fn mcp_unit_resource_by_status() {
+    let (_tmp, server) = setup_mcp();
+    let repo_path = server.repo_path().to_string();
+
+    let record_result = server
+        .record_finding(Parameters(make_record_input(
+            "a.rs", 1, "critical", "test", "r",
+        )))
+        .await
+        .expect("record");
+    let uuid = extract_tool_json(&record_result)["uuid"]
+        .as_str()
+        .expect("uuid")
+        .to_string();
+
+    // Update to in_progress
+    server
+        .update_finding_status(Parameters(UpdateStatusInput {
+            finding_id: uuid,
+            new_status: "in_progress".into(),
+            reason: None,
+            agent: None,
+        }))
+        .await
+        .expect("update");
+
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+
+    let result =
+        tally::mcp::server::read_resource_by_status(&store, "in_progress").expect("status");
+    let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
+    assert_eq!(findings.len(), 1);
+
+    let result = tally::mcp::server::read_resource_by_status(&store, "open").expect("status");
+    let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
+    assert_eq!(findings.len(), 0, "no open findings after update");
+}
+
+#[tokio::test]
+async fn mcp_unit_resource_by_rule() {
+    let (_tmp, server) = setup_mcp();
+    let repo_path = server.repo_path().to_string();
+
+    server
+        .record_finding(Parameters(make_record_input(
+            "a.rs",
+            1,
+            "critical",
+            "sql issue",
+            "sql-injection",
+        )))
+        .await
+        .expect("record");
+    server
+        .record_finding(Parameters(make_record_input(
+            "b.rs",
+            2,
+            "important",
+            "xss issue",
+            "xss-attack",
+        )))
+        .await
+        .expect("record");
+
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+
+    let result = tally::mcp::server::read_resource_by_rule(&store, "sql-injection").expect("rule");
+    let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
+    assert_eq!(findings.len(), 1);
+    assert!(findings[0]["title"].as_str().expect("t").contains("sql"));
+
+    let result =
+        tally::mcp::server::read_resource_by_rule(&store, "nonexistent-rule").expect("rule");
+    let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
+    assert_eq!(findings.len(), 0);
+}
+
+// =============================================================================
+// Prompt tests
+// =============================================================================
+
+#[tokio::test]
+async fn mcp_unit_prompt_triage_file() {
+    let (_tmp, server) = setup_mcp();
+
+    server
+        .record_finding(Parameters(make_record_input(
+            "src/main.rs",
+            10,
+            "critical",
+            "sql injection",
+            "sql-injection",
+        )))
+        .await
+        .expect("record");
+    server
+        .record_finding(Parameters(make_record_input(
+            "src/main.rs",
+            20,
+            "suggestion",
+            "use const",
+            "use-const",
+        )))
+        .await
+        .expect("record");
+
+    let result = server
+        .triage_file(Parameters(tally::mcp::server::TriageFileArgs {
+            file_path: "src/main.rs".into(),
+        }))
+        .await
+        .expect("triage prompt");
+
+    assert_eq!(result.len(), 1, "should return 1 prompt message");
+    let rmcp::model::PromptMessageContent::Text { text } = &result[0].content else {
+        panic!("expected text content");
+    };
+    assert!(text.contains("src/main.rs"), "should mention file");
+    assert!(
+        text.contains("triage"),
+        "should contain triage instructions"
+    );
+    assert!(
+        text.contains("sql injection"),
+        "should contain finding data"
+    );
+}
+
+#[tokio::test]
+async fn mcp_unit_prompt_fix_finding() {
+    let (_tmp, server) = setup_mcp();
+
+    let record = server
+        .record_finding(Parameters(make_record_input(
+            "a.rs",
+            1,
+            "critical",
+            "unwrap usage",
+            "unsafe-unwrap",
+        )))
+        .await
+        .expect("record");
+    let uuid = extract_tool_json(&record)["uuid"]
+        .as_str()
+        .expect("uuid")
+        .to_string();
+
+    let result = server
+        .fix_finding(Parameters(tally::mcp::server::FixFindingArgs {
+            finding_id: uuid,
+        }))
+        .await
+        .expect("fix prompt");
+
+    assert_eq!(result.len(), 1);
+    let rmcp::model::PromptMessageContent::Text { text } = &result[0].content else {
+        panic!("expected text content");
+    };
+    assert!(text.contains("unwrap usage"), "should contain finding");
+    assert!(text.contains("code change"), "should ask for fix");
+}
+
+#[tokio::test]
+async fn mcp_unit_prompt_summarize_findings() {
+    let (_tmp, server) = setup_mcp();
+
+    server
+        .record_finding(Parameters(make_record_input(
+            "a.rs", 1, "critical", "crit", "r1",
+        )))
+        .await
+        .expect("record");
+
+    let result = server.summarize_findings().await.expect("summarize prompt");
+
+    assert_eq!(result.len(), 1);
+    let rmcp::model::PromptMessageContent::Text { text } = &result[0].content else {
+        panic!("expected text content");
+    };
+    assert!(text.contains("stakeholder"), "should mention stakeholder");
+    assert!(text.contains("total"), "should contain summary data");
+}
+
+#[tokio::test]
+async fn mcp_unit_prompt_review_pr() {
+    let (_tmp, server) = setup_mcp();
+
+    server
+        .record_finding(Parameters(make_record_input(
+            "a.rs",
+            1,
+            "critical",
+            "blocking issue",
+            "r1",
+        )))
+        .await
+        .expect("record");
+
+    let result = server.review_pr().await.expect("review prompt");
+
+    assert_eq!(result.len(), 1);
+    let rmcp::model::PromptMessageContent::Text { text } = &result[0].content else {
+        panic!("expected text content");
+    };
+    assert!(text.contains("PR review"), "should mention PR review");
+    assert!(text.contains("blocking issue"), "should contain finding");
+}
+
+#[tokio::test]
+async fn mcp_unit_prompt_explain_finding() {
+    let (_tmp, server) = setup_mcp();
+
+    let record = server
+        .record_finding(Parameters(make_record_input(
+            "a.rs",
+            1,
+            "important",
+            "missing auth",
+            "missing-auth",
+        )))
+        .await
+        .expect("record");
+    let uuid = extract_tool_json(&record)["uuid"]
+        .as_str()
+        .expect("uuid")
+        .to_string();
+
+    let result = server
+        .explain_finding(Parameters(tally::mcp::server::ExplainFindingArgs {
+            finding_id: uuid,
+        }))
+        .await
+        .expect("explain prompt");
+
+    assert_eq!(result.len(), 1);
+    let rmcp::model::PromptMessageContent::Text { text } = &result[0].content else {
+        panic!("expected text content");
+    };
+    assert!(text.contains("missing auth"), "should contain finding");
+    assert!(
+        text.contains("plain language"),
+        "should ask for explanation"
+    );
+}

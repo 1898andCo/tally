@@ -127,7 +127,7 @@ setup:
     echo "Installing development tools..."
     rustup component add clippy
     rustup toolchain install nightly --component rustfmt
-    cargo install cargo-watch cargo-deny cargo-nextest cargo-llvm-cov --locked
+    cargo install cargo-watch cargo-deny cargo-nextest cargo-llvm-cov git-cliff --locked
     rustup component add llvm-tools-preview
     if command -v brew &>/dev/null; then
         brew install taplo lefthook
@@ -135,3 +135,30 @@ setup:
         cargo install taplo-cli --locked
     fi
     echo "Done. Run 'just check' to verify."
+
+# ---------------------------------------------------------------------------
+# Release
+# ---------------------------------------------------------------------------
+
+[group('release')]
+changelog: (_require "git-cliff" "cargo install git-cliff --locked")
+    git-cliff --config cliff.toml
+
+[group('release')]
+changelog-unreleased: (_require "git-cliff" "cargo install git-cliff --locked")
+    git-cliff --config cliff.toml --unreleased
+
+[group('release')]
+release version: (_require "git-cliff" "cargo install git-cliff --locked")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Preparing release {{ version }}..."
+    # Update version in Cargo.toml
+    sed -i '' "s/^version = \".*\"/version = \"{{ version }}\"/" Cargo.toml
+    cargo check
+    # Generate full changelog
+    git-cliff --config cliff.toml --tag "v{{ version }}" -o CHANGELOG.md
+    git add Cargo.toml Cargo.lock CHANGELOG.md
+    git commit -m "chore(release): prepare v{{ version }}"
+    git tag -a "v{{ version }}" -m "Release v{{ version }}"
+    echo "Release v{{ version }} prepared. Push with: git push origin develop --tags"

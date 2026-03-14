@@ -8,7 +8,7 @@ use crate::error::{Result, TallyError};
 use crate::model::{
     AgentRecord, Finding, FindingIdentityResolver, FindingRelationship, IdentityResolution,
     LifecycleState, Location, LocationRole, RelationshipType, Severity, StateTransition,
-    Suppression, SuppressionType, compute_fingerprint,
+    Suppression, SuppressionType, compute_fingerprint, default_schema_version,
 };
 use crate::session::SessionIdMapper;
 use crate::storage::GitFindingsStore;
@@ -20,9 +20,10 @@ use super::OutputFormat;
 /// # Errors
 ///
 /// Returns error if branch creation fails.
+#[tracing::instrument(skip_all)]
 pub fn handle_init(store: &GitFindingsStore) -> Result<()> {
     store.init()?;
-    eprintln!("Initialized findings-data branch.");
+    tracing::info!("Initialized findings-data branch");
     Ok(())
 }
 
@@ -51,6 +52,7 @@ pub struct RecordArgs<'a> {
 /// # Errors
 ///
 /// Returns error if severity is invalid, storage fails, or branch doesn't exist.
+#[tracing::instrument(skip_all, fields(file = args.file, rule = args.rule, severity = args.severity))]
 pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<()> {
     let severity: Severity = args
         .severity
@@ -116,6 +118,7 @@ pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<
 /// # Errors
 ///
 /// Returns error if storage fails or branch doesn't exist.
+#[tracing::instrument(skip_all, fields(format = ?format))]
 #[allow(clippy::too_many_arguments)]
 pub fn handle_query(
     store: &GitFindingsStore,
@@ -191,12 +194,13 @@ pub struct UpdateArgs<'a> {
 /// # Errors
 ///
 /// Returns error if finding not found, transition invalid, or storage fails.
+#[tracing::instrument(skip_all, fields(id = args.id, status = args.status))]
 pub fn handle_update(store: &GitFindingsStore, args: &UpdateArgs<'_>) -> Result<()> {
     let uuid = resolve_finding_id(store, args.id)?;
     let new_status: LifecycleState = args
         .status
         .parse()
-        .map_err(|e: String| TallyError::InvalidSeverity(e))?;
+        .map_err(|e: String| TallyError::InvalidInput(e))?;
 
     let mut finding = store.load_finding(&uuid)?;
 
@@ -239,9 +243,10 @@ pub fn handle_update(store: &GitFindingsStore, args: &UpdateArgs<'_>) -> Result<
 /// # Errors
 ///
 /// Returns error if storage fails.
+#[tracing::instrument(skip_all)]
 pub fn handle_rebuild_index(store: &GitFindingsStore) -> Result<()> {
     store.rebuild_index()?;
-    eprintln!("Index rebuilt.");
+    tracing::info!("Index rebuilt");
     Ok(())
 }
 
@@ -250,6 +255,7 @@ pub fn handle_rebuild_index(store: &GitFindingsStore) -> Result<()> {
 /// # Errors
 ///
 /// Returns error if finding not found, transition invalid, or storage fails.
+#[tracing::instrument(skip_all, fields(id = id_str))]
 pub fn handle_suppress(
     store: &GitFindingsStore,
     id_str: &str,
@@ -273,7 +279,7 @@ pub fn handle_suppress(
     let expires_at = expires
         .map(|s| {
             s.parse::<chrono::DateTime<Utc>>()
-                .map_err(|e| TallyError::InvalidSeverity(format!("invalid date: {e}")))
+                .map_err(|e| TallyError::InvalidInput(format!("invalid date: {e}")))
         })
         .transpose()?;
 
@@ -312,6 +318,7 @@ pub fn handle_suppress(
 /// # Errors
 ///
 /// Returns error if storage fails.
+#[tracing::instrument(skip_all)]
 pub fn handle_stats(store: &GitFindingsStore) -> Result<()> {
     let findings = store.load_all()?;
 
@@ -346,12 +353,76 @@ pub fn handle_stats(store: &GitFindingsStore) -> Result<()> {
     Ok(())
 }
 
+/// Handle `tally mcp-capabilities` — dynamically list all MCP tools, resources, and prompts.
+///
+/// Instantiates the MCP server to reflect the actual registered tools and prompts,
+/// so this output always matches what the server exposes.
+pub fn handle_mcp_capabilities() {
+    use crate::mcp::server::TallyMcpServer;
+
+    let server = TallyMcpServer::new(".".to_string());
+
+    println!(
+        "MCP Capabilities for tally v{}\n",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    // Tools — reflected from the tool router
+    let tools = server.list_tools();
+    println!("Tools ({}):", tools.len());
+    for tool in &tools {
+        let desc = tool.description.as_deref().unwrap_or("(no description)");
+        // Truncate description to first sentence for readability
+        let short_desc = desc.split(". ").next().unwrap_or(desc);
+        println!("  {:<24} {short_desc}", tool.name);
+    }
+
+    // Resources — static list (resource templates aren't queryable without RequestContext)
+    println!("\nResources (6):");
+    println!("  findings://summary              Counts by severity/status + recent");
+    println!("  findings://file/{{path}}          All findings in a file");
+    println!("  findings://detail/{{uuid}}        Full finding with history");
+    println!("  findings://severity/{{level}}     By severity level");
+    println!("  findings://status/{{status}}      By lifecycle state");
+    println!("  findings://rule/{{rule_id}}       By rule ID");
+
+    // Prompts — reflected from the prompt router
+    let prompts = server.list_prompts();
+    println!("\nPrompts ({}):", prompts.len());
+    for prompt in &prompts {
+        let desc = prompt.description.as_deref().unwrap_or("(no description)");
+        let short_desc = desc.split(". ").next().unwrap_or(desc);
+        println!("  {:<24} {short_desc}", prompt.name);
+        if let Some(args) = &prompt.arguments {
+            for arg in args {
+                let required = if arg.required.unwrap_or(false) {
+                    " (required)"
+                } else {
+                    ""
+                };
+                println!("    arg: {}{required}", arg.name);
+            }
+        }
+    }
+
+    println!("\nConfigure in .mcp.json:");
+    println!("  {{");
+    println!("    \"mcpServers\": {{");
+    println!("      \"tally\": {{");
+    println!("        \"command\": \"tally\",");
+    println!("        \"args\": [\"mcp-server\"]");
+    println!("      }}");
+    println!("    }}");
+    println!("  }}");
+}
+
 /// Handle `tally record-batch`.
 ///
 /// # Errors
 ///
 /// Returns error if storage fails. Individual finding errors are reported
 /// per-item (partial success).
+#[tracing::instrument(skip_all, fields(input = input_path))]
 pub fn handle_record_batch(store: &GitFindingsStore, input_path: &str, agent: &str) -> Result<()> {
     use std::io::{self, BufRead};
 
@@ -409,6 +480,7 @@ pub fn handle_record_batch(store: &GitFindingsStore, input_path: &str, agent: &s
 /// # Errors
 ///
 /// Returns error if storage or serialization fails.
+#[tracing::instrument(skip_all, fields(format = ?format))]
 pub fn handle_export(
     store: &GitFindingsStore,
     format: super::ExportFormat,
@@ -427,7 +499,7 @@ pub fn handle_export(
     match output_path {
         Some(path) => {
             std::fs::write(path, &content).map_err(TallyError::Io)?;
-            eprintln!("Exported {} findings to {path}", findings.len());
+            tracing::info!(count = findings.len(), path, "Exported findings");
         }
         None => println!("{content}"),
     }
@@ -440,11 +512,14 @@ pub fn handle_export(
 /// # Errors
 ///
 /// Returns error if remote operations fail.
+#[tracing::instrument(skip_all, fields(remote = remote))]
 pub fn handle_sync(store: &GitFindingsStore, remote: &str) -> Result<()> {
     let result = store.sync(remote)?;
-    eprintln!(
-        "Sync complete: fetched={}, merged={}, pushed={}",
-        result.fetched, result.merged, result.pushed
+    tracing::info!(
+        fetched = result.fetched,
+        merged = result.merged,
+        pushed = result.pushed,
+        "Sync complete"
     );
     Ok(())
 }
@@ -454,6 +529,7 @@ pub fn handle_sync(store: &GitFindingsStore, remote: &str) -> Result<()> {
 /// # Errors
 ///
 /// Returns error if the file cannot be read or parsed.
+#[tracing::instrument(skip_all, fields(path = path))]
 pub fn handle_import(store: &GitFindingsStore, path: &str) -> Result<()> {
     let content = std::fs::read_to_string(path).map_err(TallyError::Io)?;
     let state: serde_json::Value =
@@ -478,7 +554,7 @@ pub fn handle_import(store: &GitFindingsStore, path: &str) -> Result<()> {
         });
 
     let Some(findings) = findings_arr else {
-        eprintln!("No findings found in state file. Expected dclaude or zclaude format.");
+        tracing::warn!("No findings found in state file, expected dclaude or zclaude format");
         return Ok(());
     };
 
@@ -486,16 +562,16 @@ pub fn handle_import(store: &GitFindingsStore, path: &str) -> Result<()> {
         match import_single_finding(entry, store) {
             Ok(uuid) => {
                 imported += 1;
-                eprintln!("  Imported: {uuid}");
+                tracing::info!(%uuid, "Imported finding");
             }
             Err(e) => {
                 skipped += 1;
-                eprintln!("  Skipped: {e}");
+                tracing::warn!(error = %e, "Skipped finding");
             }
         }
     }
 
-    eprintln!("Import complete: {imported} imported, {skipped} skipped");
+    tracing::info!(imported, skipped, "Import complete");
     Ok(())
 }
 
@@ -564,7 +640,7 @@ fn parse_suppression_type(type_str: &str, pattern: Option<&str>) -> Result<Suppr
         "file" | "file_level" => Ok(SuppressionType::FileLevel),
         "inline" | "inline_comment" => {
             let p = pattern.ok_or_else(|| {
-                TallyError::InvalidSeverity(
+                TallyError::InvalidInput(
                     "inline suppression requires --suppression-pattern".to_string(),
                 )
             })?;
@@ -572,7 +648,7 @@ fn parse_suppression_type(type_str: &str, pattern: Option<&str>) -> Result<Suppr
                 pattern: p.to_string(),
             })
         }
-        other => Err(TallyError::InvalidSeverity(format!(
+        other => Err(TallyError::InvalidInput(format!(
             "invalid suppression type: '{other}' (valid: global, file, inline)"
         ))),
     }
@@ -657,6 +733,7 @@ fn create_finding(
     let new_uuid = Uuid::now_v7();
     let (repo_id, branch, commit_sha) = store.git_context();
     let finding = Finding {
+        schema_version: default_schema_version(),
         uuid: new_uuid,
         content_fingerprint: fingerprint,
         rule_id: args.rule.to_string(),
@@ -717,7 +794,7 @@ fn add_explicit_relationship(
     let related_uuid = resolve_finding_id(store, related_id_str)?;
     let rel_type: RelationshipType = relationship_str
         .parse()
-        .map_err(|e: String| TallyError::InvalidSeverity(e))?;
+        .map_err(|e: String| TallyError::InvalidInput(e))?;
 
     let mut finding = store.load_finding(&finding_uuid)?;
     finding.relationships.push(FindingRelationship {
@@ -737,7 +814,7 @@ fn parse_location_flag(s: &str) -> Result<Location> {
         3 => {
             // file:line:role
             let line: u32 = parts[1].parse().map_err(|_| {
-                TallyError::InvalidSeverity(format!("invalid line number in location: {s}"))
+                TallyError::InvalidInput(format!("invalid line number in location: {s}"))
             })?;
             let role = parse_location_role(parts[2])?;
             Ok(Location {
@@ -751,10 +828,10 @@ fn parse_location_flag(s: &str) -> Result<Location> {
         4 => {
             // file:line_start:line_end:role
             let line_start: u32 = parts[1].parse().map_err(|_| {
-                TallyError::InvalidSeverity(format!("invalid line_start in location: {s}"))
+                TallyError::InvalidInput(format!("invalid line_start in location: {s}"))
             })?;
             let line_end: u32 = parts[2].parse().map_err(|_| {
-                TallyError::InvalidSeverity(format!("invalid line_end in location: {s}"))
+                TallyError::InvalidInput(format!("invalid line_end in location: {s}"))
             })?;
             let role = parse_location_role(parts[3])?;
             Ok(Location {
@@ -765,7 +842,7 @@ fn parse_location_flag(s: &str) -> Result<Location> {
                 message: None,
             })
         }
-        _ => Err(TallyError::InvalidSeverity(format!(
+        _ => Err(TallyError::InvalidInput(format!(
             "invalid location format: '{s}' (expected file:line:role or file:line_start:line_end:role)"
         ))),
     }
@@ -776,7 +853,7 @@ fn parse_location_role(s: &str) -> Result<LocationRole> {
         "primary" => Ok(LocationRole::Primary),
         "secondary" => Ok(LocationRole::Secondary),
         "context" => Ok(LocationRole::Context),
-        other => Err(TallyError::InvalidSeverity(format!(
+        other => Err(TallyError::InvalidInput(format!(
             "invalid location role: '{other}' (valid: primary, secondary, context)"
         ))),
     }
@@ -912,6 +989,7 @@ fn process_batch_line(
         IdentityResolution::NewFinding | IdentityResolution::RelatedFinding { .. } => {
             let new_uuid = Uuid::now_v7();
             let finding = Finding {
+                schema_version: default_schema_version(),
                 uuid: new_uuid,
                 content_fingerprint: fingerprint,
                 rule_id: entry.rule_id,
@@ -1111,6 +1189,7 @@ fn import_single_finding(entry: &serde_json::Value, store: &GitFindingsStore) ->
     let new_uuid = Uuid::now_v7();
 
     let finding = Finding {
+        schema_version: default_schema_version(),
         uuid: new_uuid,
         content_fingerprint: fingerprint,
         rule_id,

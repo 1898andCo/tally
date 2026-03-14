@@ -4,15 +4,20 @@
 //! This is safe — each call is independent and git2 handles file locking internally.
 
 use chrono::Utc;
+use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     Annotated, CallToolResult, Content, ErrorCode, Implementation, ListResourceTemplatesResult,
-    ListResourcesResult, ProtocolVersion, RawResource, RawResourceTemplate,
-    ReadResourceRequestParam, ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo,
+    ListResourcesResult, PromptMessage, PromptMessageRole, ProtocolVersion, RawResource,
+    RawResourceTemplate, ReadResourceRequestParam, ReadResourceResult, ResourceContents,
+    ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
-use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::{
+    ErrorData as McpError, RoleServer, ServerHandler, prompt, prompt_router, tool, tool_handler,
+    tool_router,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -20,6 +25,7 @@ use uuid::Uuid;
 use crate::model::{
     AgentRecord, Finding, FindingIdentityResolver, IdentityResolution, LifecycleState, Location,
     LocationRole, Severity, StateTransition, Suppression, SuppressionType, compute_fingerprint,
+    default_schema_version,
 };
 use crate::storage::GitFindingsStore;
 
@@ -28,118 +34,150 @@ use crate::storage::GitFindingsStore;
 pub struct TallyMcpServer {
     repo_path: String,
     tool_router: ToolRouter<Self>,
+    prompt_router: PromptRouter<Self>,
 }
 
 // --- Input Types ---
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RecordFindingInput {
-    #[schemars(description = "File path where the finding was discovered")]
+    #[schemars(description = "Relative file path from repo root (e.g., src/main.rs)")]
     pub file_path: String,
-    #[schemars(description = "Start line number")]
+    #[schemars(description = "Start line number (1-based)")]
     pub line_start: u32,
-    #[schemars(description = "End line number (defaults to line_start)")]
+    #[schemars(description = "End line number (defaults to line_start for single-line findings)")]
     pub line_end: Option<u32>,
-    #[schemars(description = "Severity: critical, important, suggestion, tech_debt")]
+    #[schemars(description = "Severity level. One of: critical, important, suggestion, tech_debt")]
     pub severity: String,
-    #[schemars(description = "Short title of the finding")]
+    #[schemars(description = "Concise title summarizing the issue (e.g., 'unwrap on user input')")]
     pub title: String,
-    #[schemars(description = "Rule ID for grouping (e.g., unsafe-unwrap)")]
+    #[schemars(
+        description = "Rule identifier for grouping related findings (e.g., unsafe-unwrap, sql-injection, missing-test)"
+    )]
     pub rule_id: String,
-    #[schemars(description = "Detailed description")]
+    #[schemars(description = "Detailed explanation of the issue and why it matters")]
     pub description: Option<String>,
-    #[schemars(description = "Agent identifier (e.g., claude-code)")]
+    #[schemars(
+        description = "Your agent identifier for provenance tracking (e.g., claude-code, cursor)"
+    )]
     pub agent: Option<String>,
     #[schemars(
-        description = "Additional locations (array of {file_path, line_start, line_end, role})"
+        description = "Additional locations for cross-file findings. Each has file_path, line_start, optional line_end, and role (secondary or context). The primary location is set by the top-level file_path/line_start."
     )]
     pub locations: Option<Vec<LocationInput>>,
-    #[schemars(description = "Suggested fix or remediation")]
+    #[schemars(description = "Recommended fix or remediation steps")]
     pub suggested_fix: Option<String>,
-    #[schemars(description = "Evidence or code snippet supporting the finding")]
+    #[schemars(description = "Evidence supporting the finding (e.g., code snippet, stack trace)")]
     pub evidence: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct LocationInput {
+    #[schemars(description = "Relative file path from repo root")]
     pub file_path: String,
+    #[schemars(description = "Start line number (1-based)")]
     pub line_start: u32,
+    #[schemars(description = "End line number (defaults to line_start)")]
     pub line_end: Option<u32>,
-    #[schemars(description = "primary, secondary, or context")]
+    #[schemars(
+        description = "Location role: 'secondary' for supporting evidence, 'context' for additional context. Defaults to 'secondary'."
+    )]
     pub role: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueryFindingsInput {
-    #[schemars(description = "Filter by status (e.g., open, resolved)")]
+    #[schemars(
+        description = "Filter by lifecycle status. One of: open, acknowledged, in_progress, resolved, false_positive, wont_fix, deferred, suppressed, reopened, closed"
+    )]
     pub status: Option<String>,
-    #[schemars(description = "Filter by severity (e.g., critical, important)")]
+    #[schemars(
+        description = "Filter by severity level. One of: critical, important, suggestion, tech_debt"
+    )]
     pub severity: Option<String>,
-    #[schemars(description = "Filter by file path (substring match)")]
+    #[schemars(
+        description = "Filter by file path substring match (e.g., 'src/api' matches src/api/handler.rs)"
+    )]
     pub file: Option<String>,
-    #[schemars(description = "Filter by rule ID")]
+    #[schemars(description = "Filter by rule ID (exact match, e.g., unsafe-unwrap)")]
     pub rule: Option<String>,
-    #[schemars(description = "Max results (default 100)")]
+    #[schemars(description = "Maximum number of results to return (default: 100)")]
     pub limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateStatusInput {
-    #[schemars(description = "Finding UUID")]
+    #[schemars(
+        description = "Finding identifier — either a full UUID or a session short ID (e.g., C1, I2, S3, TD1)"
+    )]
     pub finding_id: String,
-    #[schemars(description = "Target status (e.g., in_progress, resolved)")]
+    #[schemars(
+        description = "Target lifecycle status. Valid transitions depend on current state: Open can go to acknowledged/in_progress/false_positive/deferred/suppressed. InProgress can go to resolved/wont_fix/deferred. Resolved can go to reopened/closed."
+    )]
     pub new_status: String,
-    #[schemars(description = "Reason for the transition")]
+    #[schemars(
+        description = "Reason for the status change (e.g., 'fixed in PR #42', 'accepted risk')"
+    )]
     pub reason: Option<String>,
-    #[schemars(description = "Agent performing the update")]
+    #[schemars(description = "Your agent identifier for audit trail (e.g., claude-code, cursor)")]
     pub agent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetContextInput {
-    #[schemars(description = "Finding UUID")]
+    #[schemars(
+        description = "Finding identifier — either a full UUID or a session short ID (e.g., C1, I2)"
+    )]
     pub finding_id: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SuppressFindingInput {
-    #[schemars(description = "Finding UUID")]
+    #[schemars(
+        description = "Finding identifier — either a full UUID or a session short ID (e.g., C1, I2)"
+    )]
     pub finding_id: String,
-    #[schemars(description = "Reason for suppression")]
+    #[schemars(
+        description = "Why this finding should be suppressed (e.g., 'accepted risk', 'false positive in test code')"
+    )]
     pub reason: String,
-    #[schemars(description = "Expiry date (ISO 8601). Omit for permanent.")]
+    #[schemars(
+        description = "ISO 8601 expiry date after which the finding auto-reopens (e.g., 2026-06-01T00:00:00Z). Omit for permanent suppression."
+    )]
     pub expires_at: Option<String>,
-    #[schemars(description = "Agent performing the suppression")]
+    #[schemars(description = "Your agent identifier for audit trail (e.g., claude-code, cursor)")]
     pub agent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RecordBatchInput {
-    #[schemars(description = "Array of findings to record")]
+    #[schemars(
+        description = "Array of findings to record. Each is processed independently — invalid entries don't block valid ones (partial success)."
+    )]
     pub findings: Vec<BatchFindingInput>,
-    #[schemars(description = "Agent identifier")]
+    #[schemars(description = "Your agent identifier applied to all findings in the batch")]
     pub agent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct BatchFindingInput {
-    #[schemars(description = "File path")]
+    #[schemars(description = "Relative file path from repo root")]
     pub file_path: String,
-    #[schemars(description = "Start line number")]
+    #[schemars(description = "Start line number (1-based)")]
     pub line_start: u32,
-    #[schemars(description = "End line number")]
+    #[schemars(description = "End line number (defaults to line_start)")]
     pub line_end: Option<u32>,
-    #[schemars(description = "Severity: critical, important, suggestion, tech_debt")]
+    #[schemars(description = "Severity level. One of: critical, important, suggestion, tech_debt")]
     pub severity: String,
-    #[schemars(description = "Short title")]
+    #[schemars(description = "Concise title summarizing the issue")]
     pub title: String,
-    #[schemars(description = "Rule ID")]
+    #[schemars(description = "Rule identifier for grouping (e.g., unsafe-unwrap, sql-injection)")]
     pub rule_id: String,
-    #[schemars(description = "Description")]
+    #[schemars(description = "Detailed explanation of the issue")]
     pub description: Option<String>,
-    #[schemars(description = "Suggested fix or remediation")]
+    #[schemars(description = "Recommended fix or remediation steps")]
     pub suggested_fix: Option<String>,
-    #[schemars(description = "Evidence or code snippet supporting the finding")]
+    #[schemars(description = "Evidence supporting the finding (e.g., code snippet)")]
     pub evidence: Option<String>,
 }
 
@@ -160,15 +198,15 @@ struct ToolOutput {
     expires_at: Option<String>,
 }
 
-// --- Tool Implementations ---
+// --- Constructor ---
 
-#[tool_router]
 impl TallyMcpServer {
     #[must_use]
     pub fn new(repo_path: String) -> Self {
         Self {
             repo_path,
             tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
         }
     }
 
@@ -178,6 +216,18 @@ impl TallyMcpServer {
         &self.repo_path
     }
 
+    /// List all registered MCP tools (reflected from the tool router).
+    #[must_use]
+    pub fn list_tools(&self) -> Vec<rmcp::model::Tool> {
+        self.tool_router.list_all()
+    }
+
+    /// List all registered MCP prompts (reflected from the prompt router).
+    #[must_use]
+    pub fn list_prompts(&self) -> Vec<rmcp::model::Prompt> {
+        self.prompt_router.list_all()
+    }
+
     fn store(&self) -> Result<GitFindingsStore, McpError> {
         GitFindingsStore::open(&self.repo_path).map_err(|e| McpError {
             code: ErrorCode(-1),
@@ -185,8 +235,15 @@ impl TallyMcpServer {
             data: None,
         })
     }
+}
 
-    #[tool(description = "Record a new finding or deduplicate with an existing one")]
+// --- Tool Implementations ---
+
+#[tool_router]
+impl TallyMcpServer {
+    #[tool(
+        description = "Record a code finding with stable identity. If the same file+line+rule was already recorded, returns the existing UUID (dedup). If a similar finding exists nearby (within 5 lines, same rule), creates a new finding linked as related. Returns JSON with status (created/deduplicated), uuid, and optional related_to/distance."
+    )]
     pub async fn record_finding(
         &self,
         params: Parameters<RecordFindingInput>,
@@ -310,7 +367,9 @@ impl TallyMcpServer {
         )]))
     }
 
-    #[tool(description = "Query findings with filters")]
+    #[tool(
+        description = "Search findings with optional filters. Returns a JSON array of matching findings. All filters are AND-combined. Omit all filters to get all findings. Empty result returns []. Each finding includes uuid, severity, status, title, locations, relationships, and full state_history."
+    )]
     pub async fn query_findings(
         &self,
         params: Parameters<QueryFindingsInput>,
@@ -346,7 +405,9 @@ impl TallyMcpServer {
         )]))
     }
 
-    #[tool(description = "Update a finding's lifecycle status")]
+    #[tool(
+        description = "Transition a finding's lifecycle status. Valid transitions: Open→acknowledged/in_progress/false_positive/deferred/suppressed, Acknowledged→in_progress/false_positive/wont_fix/deferred, InProgress→resolved/wont_fix/deferred, Resolved→reopened/closed, Reopened→acknowledged/in_progress. Closed is terminal. Invalid transitions return an error listing valid targets."
+    )]
     pub async fn update_finding_status(
         &self,
         params: Parameters<UpdateStatusInput>,
@@ -407,7 +468,9 @@ impl TallyMcpServer {
         )]))
     }
 
-    #[tool(description = "Get finding details with full context")]
+    #[tool(
+        description = "Retrieve a finding's complete details including all locations, state history, relationships, discovered_by agents, and suppression info. Accepts UUID or session short ID (C1, I2, etc.)."
+    )]
     pub async fn get_finding_context(
         &self,
         params: Parameters<GetContextInput>,
@@ -421,7 +484,9 @@ impl TallyMcpServer {
         )]))
     }
 
-    #[tool(description = "Record multiple findings in batch (partial success semantics)")]
+    #[tool(
+        description = "Record multiple findings at once. Uses partial success semantics — valid findings are recorded even if others fail. Returns JSON with total/succeeded/failed counts and per-item results. Duplicates are automatically deduplicated (not counted as failures)."
+    )]
     pub async fn record_batch(
         &self,
         params: Parameters<RecordBatchInput>,
@@ -464,7 +529,9 @@ impl TallyMcpServer {
         )]))
     }
 
-    #[tool(description = "Suppress a finding with reason and optional expiry")]
+    #[tool(
+        description = "Suppress a finding so it won't be re-reported. Optionally set an expiry date — after expiry, the finding auto-reopens on next query. Only works from Open status. Returns the finding's UUID and suppression status."
+    )]
     pub async fn suppress_finding(
         &self,
         params: Parameters<SuppressFindingInput>,
@@ -526,6 +593,158 @@ impl TallyMcpServer {
     }
 }
 
+// --- Prompt Implementations ---
+
+/// Arguments for the triage-file prompt.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TriageFileArgs {
+    #[schemars(description = "File path to triage findings for")]
+    pub file_path: String,
+}
+
+/// Arguments for the fix-finding prompt.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FixFindingArgs {
+    #[schemars(description = "Finding ID (UUID or short ID like C1)")]
+    pub finding_id: String,
+}
+
+/// Arguments for the explain-finding prompt.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExplainFindingArgs {
+    #[schemars(description = "Finding ID (UUID or short ID like C1)")]
+    pub finding_id: String,
+}
+
+#[prompt_router]
+impl TallyMcpServer {
+    /// Triage all findings in a specific file — classify priority and suggest fix order.
+    #[prompt(
+        name = "triage-file",
+        description = "Load all findings for a file and ask the AI to classify priority, assess impact, and suggest a fix order"
+    )]
+    pub async fn triage_file(
+        &self,
+        Parameters(args): Parameters<TriageFileArgs>,
+    ) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let findings_json = read_resource_file(&store, &args.file_path)?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here are all the findings for `{}`:\n\n```json\n{findings_json}\n```\n\n\
+                 Please triage these findings:\n\
+                 1. Classify each by priority (fix now, fix soon, defer, ignore)\n\
+                 2. Assess the impact of each finding\n\
+                 3. Suggest an optimal fix order (dependencies, quick wins first)\n\
+                 4. For each \"fix now\" finding, provide a brief remediation approach",
+                args.file_path
+            ),
+        )])
+    }
+
+    /// Generate a code fix for a specific finding.
+    #[prompt(
+        name = "fix-finding",
+        description = "Load a finding's details and ask the AI to generate a concrete code fix"
+    )]
+    pub async fn fix_finding(
+        &self,
+        Parameters(args): Parameters<FixFindingArgs>,
+    ) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let finding_json = read_resource_detail(&store, &args.finding_id)?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here is a code finding that needs to be fixed:\n\n\
+                 ```json\n{finding_json}\n```\n\n\
+                 Please:\n\
+                 1. Explain what the issue is and why it matters\n\
+                 2. Show the exact code change needed to fix it\n\
+                 3. Explain any edge cases or risks with the fix\n\
+                 4. Suggest a test to verify the fix"
+            ),
+        )])
+    }
+
+    /// Summarize all findings for a stakeholder-ready report.
+    #[prompt(
+        name = "summarize-findings",
+        description = "Load the findings summary and generate a stakeholder-ready report with counts, trends, and recommendations"
+    )]
+    pub async fn summarize_findings(&self) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let summary_json = read_resource_summary(&store)?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here is the current findings summary:\n\n\
+                 ```json\n{summary_json}\n```\n\n\
+                 Please create a concise stakeholder-ready report that includes:\n\
+                 1. Executive summary (1-2 sentences on overall code health)\n\
+                 2. Breakdown by severity with counts\n\
+                 3. Top 3 most critical findings that need immediate attention\n\
+                 4. Recommendations for the team"
+            ),
+        )])
+    }
+
+    /// Generate a PR review comment from open findings.
+    #[prompt(
+        name = "review-pr",
+        description = "Load all open findings and generate a structured PR review comment"
+    )]
+    pub async fn review_pr(&self) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let open_json = read_resource_by_status(&store, "open")?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here are all open findings in this repository:\n\n\
+                 ```json\n{open_json}\n```\n\n\
+                 Please write a PR review comment that:\n\
+                 1. Lists critical and important findings as blocking issues\n\
+                 2. Lists suggestions as non-blocking recommendations\n\
+                 3. Groups findings by file for easy navigation\n\
+                 4. Uses a professional, constructive tone\n\
+                 5. Formats as a GitHub PR review comment with markdown"
+            ),
+        )])
+    }
+
+    /// Explain a finding's impact and context.
+    #[prompt(
+        name = "explain-finding",
+        description = "Load a finding's details and ask the AI to explain the issue, its security/quality impact, and real-world consequences"
+    )]
+    pub async fn explain_finding(
+        &self,
+        Parameters(args): Parameters<ExplainFindingArgs>,
+    ) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let finding_json = read_resource_detail(&store, &args.finding_id)?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here is a code finding:\n\n\
+                 ```json\n{finding_json}\n```\n\n\
+                 Please explain:\n\
+                 1. What this issue is in plain language\n\
+                 2. Why it matters (security, reliability, maintainability)\n\
+                 3. What could happen if left unfixed (real-world consequences)\n\
+                 4. How common this type of issue is\n\
+                 5. Whether this is a false positive or a genuine concern"
+            ),
+        )])
+    }
+}
+
 #[tool_handler]
 impl ServerHandler for TallyMcpServer {
     fn get_info(&self) -> ServerInfo {
@@ -534,6 +753,7 @@ impl ServerHandler for TallyMcpServer {
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
+                .enable_prompts()
                 .build(),
             server_info: Implementation {
                 name: "tally".into(),
@@ -542,8 +762,34 @@ impl ServerHandler for TallyMcpServer {
                 icons: None,
                 website_url: None,
             },
-            instructions: Some("Git-backed findings tracker for AI coding agents. Tools: record_finding, record_batch, query_findings, update_finding_status, get_finding_context, suppress_finding. Resources: findings://summary, findings://file/{path}, findings://detail/{uuid}.".into()),
+            instructions: Some("tally — persistent findings tracker backed by git. Use record_finding when you discover an issue in code. Use query_findings to check existing findings before recording (avoids duplicates). Use update_finding_status to track progress (open→in_progress→resolved→closed). Findings persist across sessions with stable UUIDs. Short IDs (C1, I2, S3) are accepted anywhere a UUID is expected. Severity levels: critical, important, suggestion, tech_debt.".into()),
         }
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListPromptsResult, McpError> {
+        let prompts = self.prompt_router.list_all();
+        Ok(rmcp::model::ListPromptsResult {
+            next_cursor: None,
+            prompts,
+        })
+    }
+
+    async fn get_prompt(
+        &self,
+        request: rmcp::model::GetPromptRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::GetPromptResult, McpError> {
+        let prompt_context = rmcp::handler::server::prompt::PromptContext::new(
+            self,
+            request.name,
+            request.arguments,
+            context,
+        );
+        self.prompt_router.get_prompt(prompt_context).await
     }
 
     async fn list_resources(
@@ -589,6 +835,45 @@ impl ServerHandler for TallyMcpServer {
                     },
                     None,
                 ),
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://severity/{level}".into(),
+                        name: "Findings by Severity".into(),
+                        title: None,
+                        description: Some(
+                            "All findings at a severity level (critical, important, suggestion, tech_debt)"
+                                .into(),
+                        ),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://status/{status}".into(),
+                        name: "Findings by Status".into(),
+                        title: None,
+                        description: Some(
+                            "All findings with a lifecycle status (open, in_progress, resolved, etc.)"
+                                .into(),
+                        ),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://rule/{rule_id}".into(),
+                        name: "Findings by Rule".into(),
+                        title: None,
+                        description: Some(
+                            "All findings for a specific rule ID (e.g., unsafe-unwrap, sql-injection)"
+                                .into(),
+                        ),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
             ],
         })
     }
@@ -607,6 +892,12 @@ impl ServerHandler for TallyMcpServer {
             read_resource_file(&store, path)?
         } else if let Some(uuid_str) = uri.strip_prefix("findings://detail/") {
             read_resource_detail(&store, uuid_str)?
+        } else if let Some(level) = uri.strip_prefix("findings://severity/") {
+            read_resource_by_severity(&store, level)?
+        } else if let Some(status) = uri.strip_prefix("findings://status/") {
+            read_resource_by_status(&store, status)?
+        } else if let Some(rule) = uri.strip_prefix("findings://rule/") {
+            read_resource_by_rule(&store, rule)?
         } else {
             return Err(McpError {
                 code: ErrorCode::INVALID_REQUEST,
@@ -692,6 +983,7 @@ fn record_batch_entry(
         IdentityResolution::NewFinding | IdentityResolution::RelatedFinding { .. } => {
             let new_uuid = Uuid::now_v7();
             let finding = Finding {
+                schema_version: default_schema_version(),
                 uuid: new_uuid,
                 content_fingerprint: fingerprint,
                 rule_id: entry.rule_id.clone(),
@@ -736,6 +1028,7 @@ fn build_finding(
     ctx: &GitContext,
 ) -> Finding {
     Finding {
+        schema_version: default_schema_version(),
         uuid,
         content_fingerprint: fingerprint,
         rule_id: input.rule_id.clone(),
@@ -850,6 +1143,65 @@ pub fn read_resource_detail(store: &GitFindingsStore, uuid_str: &str) -> Result<
     })
 }
 
+/// Read the `findings://severity/{level}` resource.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage or serialization fails.
+pub fn read_resource_by_severity(
+    store: &GitFindingsStore,
+    level: &str,
+) -> Result<String, McpError> {
+    let findings = store.load_all().map_err(to_mcp_err)?;
+    let matched: Vec<&Finding> = if let Ok(sev) = level.parse::<Severity>() {
+        findings.iter().filter(|f| f.severity == sev).collect()
+    } else {
+        vec![]
+    };
+    serde_json::to_string_pretty(&matched).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+/// Read the `findings://status/{status}` resource.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage or serialization fails.
+pub fn read_resource_by_status(
+    store: &GitFindingsStore,
+    status_str: &str,
+) -> Result<String, McpError> {
+    let findings = store.load_all().map_err(to_mcp_err)?;
+    let matched: Vec<&Finding> = if let Ok(status) = status_str.parse::<LifecycleState>() {
+        findings.iter().filter(|f| f.status == status).collect()
+    } else {
+        vec![]
+    };
+    serde_json::to_string_pretty(&matched).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+/// Read the `findings://rule/{rule_id}` resource.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage or serialization fails.
+pub fn read_resource_by_rule(store: &GitFindingsStore, rule_id: &str) -> Result<String, McpError> {
+    let findings = store.load_all().map_err(to_mcp_err)?;
+    let matched: Vec<&Finding> = findings.iter().filter(|f| f.rule_id == rule_id).collect();
+    serde_json::to_string_pretty(&matched).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
 /// Run the MCP server on stdio.
 ///
 /// # Errors
@@ -861,9 +1213,9 @@ pub async fn run_mcp_server(repo_path: &str) -> anyhow::Result<()> {
     let server = TallyMcpServer::new(repo_path.to_string());
     let transport = rmcp::transport::io::stdio();
 
-    eprintln!("tally MCP server starting on stdio...");
+    tracing::info!("MCP server starting on stdio");
     let service = server.serve(transport).await?;
-    eprintln!("tally MCP server connected.");
+    tracing::info!("MCP server connected");
 
     service.waiting().await?;
     Ok(())

@@ -69,6 +69,7 @@ impl GitFindingsStore {
     /// # Errors
     ///
     /// Returns `TallyError::Git` if branch creation or commit fails.
+    #[tracing::instrument(skip_all)]
     pub fn init(&self) -> Result<()> {
         // Check if branch already exists
         if self.branch_exists() {
@@ -139,6 +140,7 @@ impl GitFindingsStore {
     ///
     /// Returns `TallyError::Serialization` if the finding cannot be serialized,
     /// or `TallyError::Git`/`TallyError::BranchNotFound` if git operations fail.
+    #[tracing::instrument(skip_all, fields(uuid = %finding.uuid))]
     pub fn save_finding(&self, finding: &Finding) -> Result<()> {
         let file_path = format!("{FINDINGS_DIR}/{}.json", finding.uuid);
         let content = serde_json::to_string_pretty(finding).map_err(TallyError::Serialization)?;
@@ -156,6 +158,7 @@ impl GitFindingsStore {
     ///
     /// Returns `TallyError::Git` if the file doesn't exist on the branch,
     /// or `TallyError::Serialization` if the JSON is malformed.
+    #[tracing::instrument(skip_all, fields(uuid = %uuid))]
     pub fn load_finding(&self, uuid: &uuid::Uuid) -> Result<Finding> {
         let file_path = format!("{FINDINGS_DIR}/{uuid}.json");
         let content = self.read_file(&file_path)?;
@@ -171,6 +174,7 @@ impl GitFindingsStore {
     /// Returns `TallyError::BranchNotFound` if the findings branch doesn't exist,
     /// or `TallyError::Git` if git operations fail. Malformed individual findings
     /// are logged to stderr and skipped (not returned as errors).
+    #[tracing::instrument(skip_all)]
     pub fn load_all(&self) -> Result<Vec<Finding>> {
         let filenames = self.list_directory(FINDINGS_DIR)?;
         let mut findings = Vec::new();
@@ -185,11 +189,11 @@ impl GitFindingsStore {
                 Ok(content) => match serde_json::from_slice::<Finding>(&content) {
                     Ok(finding) => findings.push(finding),
                     Err(e) => {
-                        eprintln!("WARNING: skipping malformed finding {name}: {e}");
+                        tracing::warn!(name, error = %e, "Skipping malformed finding");
                     }
                 },
                 Err(e) => {
-                    eprintln!("WARNING: failed to read {name}: {e}");
+                    tracing::warn!(name, error = %e, "Failed to read finding");
                 }
             }
         }
@@ -206,6 +210,7 @@ impl GitFindingsStore {
     /// # Errors
     ///
     /// Returns `TallyError::Git` if git operations fail or branch doesn't exist.
+    #[tracing::instrument(skip_all)]
     pub fn rebuild_index(&self) -> Result<()> {
         let findings = self.load_all()?;
 
@@ -287,6 +292,7 @@ impl GitFindingsStore {
     ///
     /// Returns `TallyError::Git` if remote operations fail (auth, network, etc.).
     /// Returns `TallyError::BranchNotFound` if the local branch doesn't exist.
+    #[tracing::instrument(skip_all, fields(remote = remote_name))]
     #[allow(clippy::too_many_lines)] // sync has inherent complexity: fetch + merge + push + retry
     pub fn sync(&self, remote_name: &str) -> Result<SyncResult> {
         if !self.branch_exists() {
@@ -326,10 +332,10 @@ impl GitFindingsStore {
                         true,
                         "tally sync: fast-forward to remote",
                     )?;
-                    eprintln!(
-                        "Fast-forwarded {} to {}",
-                        self.branch_name,
-                        &remote_commit.id().to_string()[..8]
+                    tracing::info!(
+                        branch = %self.branch_name,
+                        commit = %&remote_commit.id().to_string()[..8],
+                        "Fast-forwarded to remote"
                     );
                     merged = true;
                 } else if self
@@ -337,12 +343,10 @@ impl GitFindingsStore {
                     .graph_descendant_of(local_commit.id(), remote_commit.id())?
                 {
                     // Local is ahead of remote — just push
-                    eprintln!("Local is ahead of remote — pushing.");
+                    tracing::info!("Local ahead of remote, pushing");
                 } else {
                     // Diverged — one-file-per-finding means git merge should auto-resolve
-                    eprintln!(
-                        "Branches diverged — merging (one-file-per-finding should auto-resolve)."
-                    );
+                    tracing::info!("Branches diverged, merging");
                     let merge_base = self
                         .repo
                         .merge_base(local_commit.id(), remote_commit.id())?;
@@ -376,7 +380,7 @@ impl GitFindingsStore {
                         &merged_tree,
                         &[&local_commit, remote_commit],
                     )?;
-                    eprintln!("Merged remote changes: {}", &merge_commit.to_string()[..8]);
+                    tracing::info!(commit = %&merge_commit.to_string()[..8], "Merged remote changes");
                     merged = true;
                 }
             }
@@ -395,12 +399,12 @@ impl GitFindingsStore {
                 }
                 Err(e) if attempt < MAX_LOCK_RETRIES - 1 => {
                     let delay = Duration::from_millis(100 * u64::from(2_u32.pow(attempt)));
-                    eprintln!(
-                        "Push failed ({}), retry {}/{} after {}ms",
-                        e,
-                        attempt + 1,
-                        MAX_LOCK_RETRIES,
-                        delay.as_millis()
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        max = MAX_LOCK_RETRIES,
+                        delay_ms = delay.as_millis(),
+                        error = %e,
+                        "Push failed, retrying"
                     );
                     thread::sleep(delay);
 
@@ -481,12 +485,12 @@ impl GitFindingsStore {
                 Ok(_) => return Ok(()),
                 Err(e) if e.code() == ErrorCode::Locked && attempt < MAX_LOCK_RETRIES - 1 => {
                     let delay = Duration::from_millis(100 * u64::from(2_u32.pow(attempt)));
-                    eprintln!(
-                        "Ref lock contention on {}, retry {}/{} after {}ms",
-                        self.branch_name,
-                        attempt + 1,
-                        MAX_LOCK_RETRIES,
-                        delay.as_millis()
+                    tracing::warn!(
+                        branch = %self.branch_name,
+                        attempt = attempt + 1,
+                        max = MAX_LOCK_RETRIES,
+                        delay_ms = delay.as_millis(),
+                        "Ref lock contention, retrying"
                     );
                     thread::sleep(delay);
                 }

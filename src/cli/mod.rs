@@ -8,6 +8,14 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(name = "tally", version, about)]
 pub struct Cli {
+    /// Increase logging verbosity (-v info, -vv debug, -vvv trace)
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    pub verbose: u8,
+
+    /// Decrease logging verbosity (-q error, -qq off)
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    pub quiet: u8,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -215,16 +223,26 @@ pub enum Command {
 
     /// Run as MCP server over stdio.
     McpServer,
+
+    /// Generate shell completions for bash, zsh, fish, or powershell.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+
+    /// List available MCP capabilities (tools, resources, prompts).
+    McpCapabilities,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum OutputFormat {
     Json,
     Table,
     Summary,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum ExportFormat {
     Sarif,
     Csv,

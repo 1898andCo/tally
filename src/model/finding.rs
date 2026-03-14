@@ -11,32 +11,56 @@ use uuid::Uuid;
 
 use super::state_machine::{LifecycleState, StateTransition};
 
+/// Default schema version for new findings.
+#[must_use]
+pub fn default_schema_version() -> String {
+    "1.0.0".to_string()
+}
+
+/// Default datetime for deserialization of legacy files.
+pub(crate) fn default_datetime() -> DateTime<Utc> {
+    Utc::now()
+}
+
 /// A finding represents a single issue discovered in code by an AI agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
+    // --- Schema ---
+    /// Schema version for forward/backward compatibility.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: String,
+
     // --- Identity ---
     /// Stable UUID v7 (time-ordered). Assigned on first creation, never changes.
+    #[serde(default)]
     pub uuid: Uuid,
     /// SHA-256 of (`file_path` + `line_range` + `rule_id`). For deduplication and
     /// re-matching after refactoring.
+    #[serde(default)]
     pub content_fingerprint: String,
     /// Grouping key: "unsafe-unwrap", "sql-injection", "missing-test", etc.
     /// Enables "show all instances of this rule" queries.
+    #[serde(default)]
     pub rule_id: String,
 
     // --- Locations (multi-file supported) ---
     /// Primary location + optional secondary locations (cross-file findings).
     /// Maps to SARIF multi-location representation.
+    #[serde(default)]
     pub locations: Vec<Location>,
 
     // --- Classification ---
+    #[serde(default)]
     pub severity: Severity,
+    #[serde(default)]
     pub category: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 
     // --- Description ---
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggested_fix: Option<String>,
@@ -44,16 +68,21 @@ pub struct Finding {
     pub evidence: Option<String>,
 
     // --- Lifecycle ---
+    #[serde(default)]
     pub status: LifecycleState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub state_history: Vec<StateTransition>,
 
     // --- Provenance ---
+    #[serde(default)]
     pub discovered_by: Vec<AgentRecord>,
+    #[serde(default = "default_datetime")]
     pub created_at: DateTime<Utc>,
+    #[serde(default = "default_datetime")]
     pub updated_at: DateTime<Utc>,
 
     // --- Context ---
+    #[serde(default)]
     pub repo_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
@@ -85,6 +114,7 @@ pub struct Location {
 /// Role of a location within a multi-location finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum LocationRole {
     /// The main issue location.
     Primary,
@@ -97,11 +127,13 @@ pub enum LocationRole {
 /// 4-tier severity matching dclaude/zclaude conventions.
 /// Maps to SARIF on export: Critical->error, Important->warning,
 /// Suggestion->note, TechDebt->none.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Severity {
     Critical,
     Important,
+    #[default]
     Suggestion,
     TechDebt,
 }
@@ -160,8 +192,11 @@ impl std::str::FromStr for Severity {
 /// Record of which agent discovered this finding and when.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRecord {
+    #[serde(default)]
     pub agent_id: String,
+    #[serde(default)]
     pub session_id: String,
+    #[serde(default = "default_datetime")]
     pub detected_at: DateTime<Utc>,
     /// Session-scoped short ID for display (e.g., "C1", "I2").
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -181,6 +216,7 @@ pub struct FindingRelationship {
 /// Types of relationships between findings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RelationshipType {
     /// This finding is a duplicate of the related finding.
     DuplicateOf,
@@ -243,6 +279,7 @@ pub struct Suppression {
 /// How the finding is suppressed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum SuppressionType {
     /// Global suppression (applies everywhere).
     Global,

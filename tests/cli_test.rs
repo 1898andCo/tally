@@ -46,10 +46,41 @@ fn cli_help_shows_subcommands() {
 }
 
 #[test]
+fn cli_mcp_capabilities_lists_all() {
+    // No repo needed — capabilities are reflected from the server struct
+    tally()
+        .arg("mcp-capabilities")
+        .assert()
+        .success()
+        // Tools — dynamically reflected
+        .stdout(predicate::str::contains("Tools (6)"))
+        .stdout(predicate::str::contains("record_finding"))
+        .stdout(predicate::str::contains("query_findings"))
+        .stdout(predicate::str::contains("update_finding_status"))
+        .stdout(predicate::str::contains("suppress_finding"))
+        .stdout(predicate::str::contains("record_batch"))
+        .stdout(predicate::str::contains("get_finding_context"))
+        // Prompts — dynamically reflected
+        .stdout(predicate::str::contains("Prompts (5)"))
+        .stdout(predicate::str::contains("triage-file"))
+        .stdout(predicate::str::contains("fix-finding"))
+        .stdout(predicate::str::contains("summarize-findings"))
+        .stdout(predicate::str::contains("review-pr"))
+        .stdout(predicate::str::contains("explain-finding"))
+        // Resources
+        .stdout(predicate::str::contains("Resources (6)"))
+        .stdout(predicate::str::contains("findings://summary"))
+        // Config example
+        .stdout(predicate::str::contains("mcp-server"));
+}
+
+#[test]
 fn cli_init_succeeds() {
     let tmp = setup_cli_repo();
     tally()
         .arg("init")
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
@@ -693,10 +724,12 @@ fn cli_import_dclaude_format() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("2 imported"));
+        .stderr(predicate::str::contains("imported=2"));
 
     // Verify findings were imported
     tally()
@@ -734,10 +767,12 @@ fn cli_import_zclaude_format() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("1 imported"));
+        .stderr(predicate::str::contains("imported=1"));
 }
 
 #[test]
@@ -754,6 +789,8 @@ fn cli_import_empty_file_no_error() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "warn")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
@@ -1764,6 +1801,8 @@ fn cli_rebuild_index() {
 
     tally()
         .arg("rebuild-index")
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
@@ -2186,6 +2225,239 @@ fn cli_dedup_same_location_unchanged() {
 }
 
 #[test]
+fn cli_dedup_when_suppressed() {
+    let tmp = setup_cli_repo();
+    let dir = tmp.path();
+    tally().arg("init").current_dir(dir).assert().success();
+
+    // Record a finding
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "critical",
+            "--title",
+            "test",
+            "--rule",
+            "dedup-rule",
+        ])
+        .current_dir(dir)
+        .output()
+        .expect("run");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse");
+    let uuid = json["uuid"].as_str().expect("uuid");
+
+    // Suppress the finding
+    tally()
+        .args(["suppress", uuid, "--reason", "accepted"])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Record same fingerprint again — should dedup, not create new
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "critical",
+            "--title",
+            "test",
+            "--rule",
+            "dedup-rule",
+        ])
+        .current_dir(dir)
+        .output()
+        .expect("run");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse");
+    assert_eq!(
+        json["status"], "deduplicated",
+        "should dedup even when suppressed"
+    );
+    assert_eq!(json["uuid"], uuid, "should return same UUID");
+}
+
+#[test]
+fn cli_dedup_ignores_severity_difference() {
+    let tmp = setup_cli_repo();
+    let dir = tmp.path();
+    tally().arg("init").current_dir(dir).assert().success();
+
+    // Record as critical
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/a.rs",
+            "--line",
+            "10",
+            "--severity",
+            "critical",
+            "--title",
+            "test",
+            "--rule",
+            "my-rule",
+        ])
+        .current_dir(dir)
+        .output()
+        .expect("run");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse");
+    let uuid = json["uuid"].as_str().expect("uuid");
+
+    // Record same file+line+rule but with different severity — fingerprint
+    // doesn't include severity, so this should still dedup
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/a.rs",
+            "--line",
+            "10",
+            "--severity",
+            "suggestion",
+            "--title",
+            "test",
+            "--rule",
+            "my-rule",
+        ])
+        .current_dir(dir)
+        .output()
+        .expect("run");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse");
+    assert_eq!(
+        json["status"], "deduplicated",
+        "severity difference should still dedup"
+    );
+    assert_eq!(json["uuid"], uuid, "should return original UUID");
+}
+
+#[test]
+fn cli_no_dedup_different_rule_same_location() {
+    let tmp = setup_cli_repo();
+    let dir = tmp.path();
+    tally().arg("init").current_dir(dir).assert().success();
+
+    // Record with rule-a
+    let output1 = tally()
+        .args([
+            "record",
+            "--file",
+            "src/a.rs",
+            "--line",
+            "10",
+            "--severity",
+            "critical",
+            "--title",
+            "issue A",
+            "--rule",
+            "rule-a",
+        ])
+        .current_dir(dir)
+        .output()
+        .expect("run");
+    let json1: serde_json::Value = serde_json::from_slice(&output1.stdout).expect("parse");
+    let uuid1 = json1["uuid"].as_str().expect("uuid").to_string();
+
+    // Record same file+line but different rule — different fingerprint, new finding
+    let output2 = tally()
+        .args([
+            "record",
+            "--file",
+            "src/a.rs",
+            "--line",
+            "10",
+            "--severity",
+            "critical",
+            "--title",
+            "issue B",
+            "--rule",
+            "rule-b",
+        ])
+        .current_dir(dir)
+        .output()
+        .expect("run");
+    let json2: serde_json::Value = serde_json::from_slice(&output2.stdout).expect("parse");
+    assert_eq!(
+        json2["status"], "created",
+        "different rule should create new finding"
+    );
+    assert_ne!(
+        json2["uuid"].as_str().expect("uuid"),
+        uuid1,
+        "should have different UUID"
+    );
+}
+
+#[test]
+fn cli_no_dedup_same_rule_distant_line() {
+    let tmp = setup_cli_repo();
+    let dir = tmp.path();
+    tally().arg("init").current_dir(dir).assert().success();
+
+    // Record at line 10
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/a.rs",
+            "--line",
+            "10",
+            "--severity",
+            "critical",
+            "--title",
+            "first",
+            "--rule",
+            "my-rule",
+        ])
+        .current_dir(dir)
+        .assert()
+        .success();
+
+    // Record same rule at line 100 — well beyond proximity threshold of 5
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/a.rs",
+            "--line",
+            "100",
+            "--severity",
+            "critical",
+            "--title",
+            "second",
+            "--rule",
+            "my-rule",
+        ])
+        .current_dir(dir)
+        .output()
+        .expect("run");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse");
+    assert_eq!(
+        json["status"], "created",
+        "distant line should create new finding (not dedup or related)"
+    );
+
+    // Verify we have 2 findings total
+    let findings: Vec<serde_json::Value> = serde_json::from_slice(
+        &tally()
+            .args(["query", "--format", "json"])
+            .current_dir(dir)
+            .output()
+            .expect("query")
+            .stdout,
+    )
+    .expect("parse");
+    assert_eq!(findings.len(), 2, "should have 2 separate findings");
+}
+
+#[test]
 fn cli_parse_location_flag_3_part() {
     // --location "file.rs:42:secondary" (3-part format)
     let tmp = setup_cli_repo();
@@ -2546,10 +2818,12 @@ fn cli_import_severity_inferred_from_id_prefix() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("3 imported"));
+        .stderr(predicate::str::contains("imported=3"));
 
     // Query and verify inferred severities
     let output = tally()
@@ -2605,10 +2879,12 @@ fn cli_import_tolerates_non_object_entries() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("3 imported"));
+        .stderr(predicate::str::contains("imported=3"));
 }
 
 #[test]
@@ -2829,10 +3105,12 @@ fn cli_import_tech_debt_severity() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("1 imported"));
+        .stderr(predicate::str::contains("imported=1"));
 
     // Verify severity is tech_debt
     let output = tally()

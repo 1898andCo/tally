@@ -34,6 +34,9 @@ pub enum TallyError {
     #[error("invalid severity: {0}")]
     InvalidSeverity(String),
 
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("no primary location — at least one location required")]
     NoLocation,
 }
