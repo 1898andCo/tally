@@ -115,8 +115,12 @@ fn run(cli: Cli) -> tally::error::Result<()> {
             handlers::handle_stats(&store)
         }
         Command::McpServer => {
-            eprintln!("MCP server not yet implemented (Task 5)");
-            Ok(())
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(tally::error::TallyError::Io)?;
+            rt.block_on(tally::mcp::server::run_mcp_server("."))
+                .map_err(|e| tally::error::TallyError::Io(
+                    std::io::Error::other(e.to_string())
+                ))
         }
     }
 }
