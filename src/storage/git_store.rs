@@ -185,7 +185,7 @@ impl GitFindingsStore {
         }
 
         let schema_content = serde_json::json!({
-            "version": "1.0.0",
+            "version": "1.1.0",
             "format": "one-file-per-finding",
             "created_at": chrono::Utc::now().to_rfc3339(),
         });
@@ -389,6 +389,13 @@ impl GitFindingsStore {
         self.repo
             .find_branch(&self.branch_name, BranchType::Local)
             .is_ok()
+    }
+
+    /// Check if any remote has a findings-data branch (i.e., findings have been pushed).
+    #[must_use]
+    pub fn has_remote_branch(&self) -> bool {
+        let remote_ref = format!("refs/remotes/origin/{}", self.branch_name);
+        self.repo.find_reference(&remote_ref).is_ok()
     }
 
     /// Sync the findings branch with the remote (fetch + merge + push).

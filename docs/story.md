@@ -1731,6 +1731,23 @@ just ci           # Full CI mirror
 
 ---
 
+## Post-MVP Enhancements (v0.5.0)
+
+The following capabilities were added in v0.5.0 to address operational pain points discovered during real-world use (axiathon Story 5.1 check-drift session):
+
+- **Field editing** (`update_finding` MCP tool, `tally update-fields` CLI): Edit mutable fields (title, description, suggested_fix, evidence, severity, category, tags) with full audit trail via `edit_history`. Identity fields remain immutable.
+- **Notes** (`add_note` MCP tool, `tally note` CLI): Append timestamped annotations to findings without changing status. Used for cross-references, decisions, and context.
+- **Tag management** (`add_tag`/`remove_tag` MCP tools, `tally tag` CLI): Add/remove tags independently with dedup. `tally query --tag` and MCP `query_findings` tag filter for workflow-based filtering.
+- **State machine expansion**: Added `deferred → reopened` and `suppressed → reopened` transitions so findings can re-enter the active workflow when new information surfaces.
+- **SARIF property bags**: Export includes `tally_notes`, `tally_editHistory`, `tally_tags` in `result.properties` and `resultProvenance.firstDetectionTimeUtc` per SARIF 2.1.0 extension conventions.
+- **Enhanced stats**: Shows findings with notes/edits counts and top 5 tags by frequency. Warns if findings-data branch is local-only.
+- **Auth fix**: git2 credential callbacks with 4-strategy chain (credential helper, env var, SSH agent, SSH key files) and cross-platform error guidance.
+- **Schema version**: Finding schema updated to 1.1.0 (backward-compatible — v0.4.0 findings load without migration).
+
+See `docs/story-finding-mutability.md` for the full story spec.
+
+---
+
 ## Research Basis
 
 - **dclaude v2.5.0**: 20 agents, 4 severity tiers (C/I/S/TD), pr-fix-verify state file (schema v2.0), known-spec-conflicts suppression, adaptive scanning, finding data model with id/severity/title/file/lines/category/agents/status

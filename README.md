@@ -98,10 +98,13 @@ Logging can also be controlled with the `RUST_LOG` environment variable (e.g., `
 | `init` | Initialize `findings-data` orphan branch |
 | `record` | Create or deduplicate a single finding |
 | `record-batch` | Batch record from JSONL file or stdin |
-| `query` | Search findings with filters |
+| `query` | Search findings with filters (including `--tag`) |
 | `update` | Change lifecycle status |
+| `update-fields` | Edit mutable fields (title, description, severity, etc.) |
+| `note` | Add timestamped note without changing status |
+| `tag` | Add/remove tags (`--add X --remove Y`) |
 | `suppress` | Suppress with reason and optional expiry |
-| `stats` | Summary statistics |
+| `stats` | Summary statistics (severity, status, notes, edits, top tags) |
 | `sync` | Pull + merge + push findings-data branch |
 | `import` | Import from dclaude/zclaude state files |
 | `export` | Export as SARIF 2.1.0, CSV, or JSON |
@@ -205,16 +208,20 @@ Configure in `.mcp.json` for Claude Code:
 }
 ```
 
-### Tools (11)
+### Tools (15)
 
 | Tool | Description |
 |------|-------------|
 | `initialize_store` | Initialize the findings-data branch (idempotent) |
 | `record_finding` | Create or deduplicate a finding |
 | `record_batch` | Batch record multiple findings |
-| `query_findings` | Search with filters |
+| `query_findings` | Search with filters (status, severity, file, rule, tag) |
 | `update_finding_status` | Transition lifecycle state |
-| `get_finding_context` | Retrieve finding with full context |
+| `update_finding` | Edit mutable fields (title, description, severity, etc.) with audit trail |
+| `get_finding_context` | Retrieve finding with full context, notes, and edit history |
+| `add_note` | Append timestamped note without changing status |
+| `add_tag` | Add tags to a finding (merge, dedup) |
+| `remove_tag` | Remove tags from a finding (exact match) |
 | `suppress_finding` | Suppress with reason and expiry |
 | `export_findings` | Export as JSON, CSV, or SARIF 2.1.0 |
 | `sync_findings` | Sync findings-data branch with remote |
@@ -259,6 +266,20 @@ findings-data branch:
 
 The working tree is never modified. All operations use `git2` plumbing (blob/tree/commit objects).
 
+### Protecting the findings-data branch
+
+Repos using tally should add a branch protection rule (or GitHub ruleset) for `findings-data` with **"Restrict deletions"** enabled. No status checks or PR requirements are needed — just prevent accidental `git push --delete origin findings-data`.
+
+```bash
+# Via GitHub CLI (requires admin access)
+gh api repos/OWNER/REPO/rulesets -f name="protect-findings-data" \
+  -f target=branch -f enforcement=active \
+  -f 'conditions[ref_name][include][]=refs/heads/findings-data' \
+  -f 'rules[][type]=deletion'
+```
+
+`tally stats` will warn if findings-data has no upstream tracking branch (local-only findings).
+
 ### Why one-file-per-finding
 
 - Zero merge conflicts for concurrent writes (each finding is a unique file)
@@ -282,9 +303,11 @@ Open -> Acknowledged -> InProgress -> Resolved -> Closed
   |         |              |
   |         +-> FalsePositive -> Reopened -> Acknowledged
   |         +-> WontFix -------> Reopened -> InProgress
-  |         +-> Deferred ------> Open
-  +-> Suppressed --------------> Open
+  |         +-> Deferred ------> Open / Reopened / Closed
+  +-> Suppressed --------------> Open / Reopened / Closed
 ```
+
+Deferred and Suppressed findings can be reopened when new information surfaces (v0.5.0). Reopened findings can then transition to Acknowledged or InProgress through the existing path. Closed is terminal.
 
 ## Relationship Types
 

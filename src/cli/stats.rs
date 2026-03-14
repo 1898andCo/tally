@@ -69,5 +69,14 @@ pub fn handle_stats(store: &GitFindingsStore) -> Result<()> {
         }
     }
 
+    // Doctor check: warn if findings-data has no upstream tracking branch
+    if !findings.is_empty() && !store.has_remote_branch() {
+        println!();
+        println!(
+            "  Warning: findings-data branch is not pushed to remote — \
+             findings are local-only. Run `tally sync` to push."
+        );
+    }
+
     Ok(())
 }
