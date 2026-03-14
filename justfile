@@ -93,6 +93,22 @@ clean:
     cargo clean
 
 # ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+
+[group('test')]
+coverage: (_require "cargo-llvm-cov" "cargo install cargo-llvm-cov --locked")
+    cargo llvm-cov --all-targets --summary-only
+
+[group('test')]
+coverage-html: (_require "cargo-llvm-cov" "cargo install cargo-llvm-cov --locked")
+    cargo llvm-cov --all-targets --html --open
+
+[group('test')]
+coverage-json: (_require "cargo-llvm-cov" "cargo install cargo-llvm-cov --locked")
+    cargo llvm-cov --all-targets --codecov --output-path codecov.json
+
+# ---------------------------------------------------------------------------
 # CI
 # ---------------------------------------------------------------------------
 
@@ -111,7 +127,8 @@ setup:
     echo "Installing development tools..."
     rustup component add clippy
     rustup toolchain install nightly --component rustfmt
-    cargo install cargo-watch cargo-deny cargo-nextest --locked
+    cargo install cargo-watch cargo-deny cargo-nextest cargo-llvm-cov --locked
+    rustup component add llvm-tools-preview
     if command -v brew &>/dev/null; then
         brew install taplo lefthook
     else
