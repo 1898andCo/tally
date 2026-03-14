@@ -1,5 +1,14 @@
 # CLAUDE.md
 
+@SOUL.md
+@.claude/rules/_index.md
+
+## Project State (Mar 2026)
+
+Single binary crate (`tally-ng` on crates.io, binary name `tally`). v0.4.0.
+255 tests, 90.6% coverage. Dual interface: CLI (clap) + MCP server (rmcp).
+Git-backed storage on orphan `findings-data` branch via `git2`.
+
 ## Build & Test
 
 ```bash
@@ -29,4 +38,11 @@ Git Flow — branch from `develop`, PRs target `develop`.
 - `#![forbid(unsafe_code)]`
 - No `unwrap()` in production code
 
-@.claude/rules/_index.md
+## On-Demand References
+
+| Topic | Location |
+|-------|----------|
+| Original story spec | `docs/story.md` |
+| Finding mutability story | `docs/story-finding-mutability.md` |
+| Release process | `docs/story-finding-mutability.md` → "Release Process" section |
+| MCP server config | `.mcp.json` |
