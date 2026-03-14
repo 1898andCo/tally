@@ -11,21 +11,38 @@ Provides persistent, content-addressable finding identity across sessions, agent
 - **Multi-agent**: Cross-agent deduplication via fingerprint matching, session-scoped short IDs (C1, I2, S3, TD4)
 - **Git-backed**: One-file-per-finding on an orphan branch, zero merge conflicts for concurrent writes
 - **Dual interface**: CLI for scripts/CI + MCP server for Claude Code, Cursor, Windsurf
+- **MCP server**: 6 tools, 6 resource templates, 5 prompt templates with rich descriptions for AI agents
 - **Export**: SARIF 2.1.0 (GitHub Code Scanning), CSV, JSON
 - **Import**: dclaude and zclaude state file migration
+- **Schema evolution**: Versioned findings with forward-compatible deserialization
+- **Structured logging**: tracing spans with `-v`/`-q` verbosity control and `RUST_LOG` support
+- **Shell completions**: bash, zsh, fish, powershell via `tally completions`
 
 ## Installation
+
+### From crates.io
+
+```bash
+cargo install tally
+```
+
+### With cargo-binstall (prebuilt binaries)
+
+```bash
+cargo binstall tally
+```
+
+### With Homebrew (macOS/Linux)
+
+```bash
+brew tap 1898andCo/tap
+brew install tally
+```
 
 ### From source
 
 ```bash
 cargo install --path .
-```
-
-### From crates.io (planned)
-
-```bash
-cargo install tally
 ```
 
 ## Quick Start
@@ -55,9 +72,24 @@ tally sync
 
 # Export for GitHub Code Scanning
 tally export --format sarif --output findings.sarif
+
+# List MCP capabilities
+tally mcp-capabilities
+
+# Generate shell completions
+tally completions zsh > ~/.zfunc/_tally
 ```
 
 ## CLI Reference
+
+### Global Flags
+
+```
+-v, --verbose    Increase logging verbosity (-v info, -vv debug, -vvv trace)
+-q, --quiet      Decrease logging verbosity (-q error, -qq off)
+```
+
+Logging can also be controlled with the `RUST_LOG` environment variable (e.g., `RUST_LOG=tally=debug`).
 
 ### Subcommands
 
@@ -73,7 +105,10 @@ tally export --format sarif --output findings.sarif
 | `sync` | Pull + merge + push findings-data branch |
 | `import` | Import from dclaude/zclaude state files |
 | `export` | Export as SARIF 2.1.0, CSV, or JSON |
+| `rebuild-index` | Rebuild `index.json` from finding files |
 | `mcp-server` | Run as MCP server over stdio |
+| `mcp-capabilities` | List available MCP tools, resources, and prompts |
+| `completions` | Generate shell completions (bash/zsh/fish/powershell) |
 
 ### `tally record`
 
@@ -91,6 +126,9 @@ tally export --format sarif --output findings.sarif
 --location <spec>       Additional location: file:line:role or file:start:end:role (repeatable)
 --related-to <id>       Related finding ID (UUID or short ID)
 --relationship <type>   Relationship type (default: related_to)
+--category <name>       Category for grouping (e.g., injection, auth)
+--suggested-fix <text>  Suggested fix or remediation
+--evidence <text>       Evidence or code snippet supporting the finding
 ```
 
 ### `tally query`
@@ -100,8 +138,29 @@ tally export --format sarif --output findings.sarif
 --severity <level>      Filter by severity
 --file <pattern>        Filter by file path (substring match)
 --rule <id>             Filter by rule ID
+--related-to <id>       Filter by related finding ID
 --format <fmt>          json | table | summary (default: json)
 --limit <n>             Max results (default: 100)
+```
+
+### `tally suppress`
+
+```
+<id>                    Finding UUID or session short ID
+--reason <text>         Reason for suppression (required)
+--expires <datetime>    Expiry date (ISO 8601, omit for permanent)
+--agent <id>            Agent identifier (default: cli)
+--suppression-type <t>  global | file | inline (default: global)
+--suppression-pattern   Inline suppression pattern (with --suppression-type inline)
+```
+
+### `tally completions`
+
+```bash
+# Generate and install completions
+tally completions bash > ~/.bash_completion.d/tally
+tally completions zsh > ~/.zfunc/_tally
+tally completions fish > ~/.config/fish/completions/tally.fish
 ```
 
 ### `tally update`
@@ -157,13 +216,26 @@ Configure in `.mcp.json` for Claude Code:
 | `get_finding_context` | Retrieve finding with full context |
 | `suppress_finding` | Suppress with reason and expiry |
 
-### Resources (3)
+### Resources (6)
 
 | URI | Description |
 |-----|-------------|
 | `findings://summary` | Counts by severity/status, 10 most recent |
 | `findings://file/{path}` | All findings in a specific file |
 | `findings://detail/{uuid}` | Full finding with history |
+| `findings://severity/{level}` | All findings at a severity level |
+| `findings://status/{state}` | All findings in a lifecycle state |
+| `findings://rule/{rule_id}` | All findings matching a rule ID |
+
+### Prompts (5)
+
+| Prompt | Description |
+|--------|-------------|
+| `triage-file` | Triage all findings in a file by severity and suggest resolution order |
+| `fix-finding` | Generate a fix plan for a specific finding with code changes |
+| `summarize-findings` | Executive summary of all open findings with risk assessment |
+| `review-pr` | Review a PR's changes against tracked findings |
+| `explain-finding` | Explain a finding's context, impact, and remediation options |
 
 ## Storage Model
 
@@ -244,6 +316,10 @@ tally import .claude/pr-reviews/42.json
 # Record findings from a linter
 my-linter --output jsonl | tally record-batch --agent my-linter
 ```
+
+## Schema Evolution
+
+Every finding includes a `schema_version` field. All fields use `#[serde(default)]` for forward-compatible deserialization — findings created by older versions of tally are readable by newer versions without migration. Enums use `#[non_exhaustive]` to allow adding variants without breaking existing consumers.
 
 ## License
 

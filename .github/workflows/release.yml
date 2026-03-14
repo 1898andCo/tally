@@ -67,6 +67,8 @@ jobs:
             os: macos-13
           - target: aarch64-apple-darwin
             os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -81,7 +83,8 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           tag="${{ needs.create-release.outputs.tag }}"
@@ -102,6 +105,22 @@ jobs:
           fi
 
           echo "ARCHIVE=${archive}" >> "$GITHUB_ENV"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.create-release.outputs.tag }}"
+          $bin = "tally.exe"
+          $src = "target/${{ matrix.target }}/release/$bin"
+          $archive = "tally-${tag}-${{ matrix.target }}.zip"
+
+          Compress-Archive -Path $src -DestinationPath $archive
+
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii "${archive}.sha256"
+
+          echo "ARCHIVE=${archive}" >> $env:GITHUB_ENV
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
