@@ -57,13 +57,13 @@ impl LifecycleState {
     }
 
     /// Check if transitioning to `target` is valid from this state.
-    #[must_use] 
+    #[must_use]
     pub fn can_transition_to(&self, target: Self) -> bool {
         self.allowed_transitions().contains(&target)
     }
 
     /// All possible lifecycle states.
-    #[must_use] 
+    #[must_use]
     pub fn all() -> &'static [LifecycleState] {
         &[
             Self::Open,

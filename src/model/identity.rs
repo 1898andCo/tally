@@ -15,7 +15,7 @@ use super::finding::{Finding, Location, LocationRole};
 ///
 /// Uses only the primary location. Does NOT include description, title, or severity —
 /// those can change without creating a new finding.
-#[must_use] 
+#[must_use]
 pub fn compute_fingerprint(primary_location: &Location, rule_id: &str) -> String {
     let input = format!(
         "{}:{}-{}:{}",
@@ -31,7 +31,7 @@ pub fn compute_fingerprint(primary_location: &Location, rule_id: &str) -> String
 ///
 /// Returns the first location with `role == Primary`, or the first location if
 /// none is explicitly marked as primary.
-#[must_use] 
+#[must_use]
 pub fn primary_location(locations: &[Location]) -> Option<&Location> {
     locations
         .iter()
@@ -65,7 +65,7 @@ pub struct FindingIdentityResolver {
 
 impl FindingIdentityResolver {
     /// Build resolver from existing findings.
-    #[must_use] 
+    #[must_use]
     pub fn from_findings(findings: &[Finding]) -> Self {
         let mut by_fingerprint = HashMap::new();
         let mut by_location: HashMap<(String, String), Vec<(u32, Uuid)>> = HashMap::new();
@@ -92,7 +92,7 @@ impl FindingIdentityResolver {
     ///
     /// Returns `ExistingFinding` if fingerprint matches, `RelatedFinding` if same
     /// rule is nearby (within `proximity_threshold` lines), or `NewFinding`.
-    #[must_use] 
+    #[must_use]
     pub fn resolve(
         &self,
         fingerprint: &str,

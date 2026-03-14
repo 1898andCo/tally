@@ -119,7 +119,7 @@ impl Severity {
     }
 
     /// Map to SARIF level string.
-    #[must_use] 
+    #[must_use]
     pub fn to_sarif_level(&self) -> &'static str {
         match self {
             Self::Critical => "error",
@@ -196,6 +196,40 @@ pub enum RelationshipType {
     Supersedes,
 }
 
+impl std::fmt::Display for RelationshipType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateOf => write!(f, "duplicate_of"),
+            Self::Blocks => write!(f, "blocks"),
+            Self::RelatedTo => write!(f, "related_to"),
+            Self::Causes => write!(f, "causes"),
+            Self::DiscoveredWhileFixing => write!(f, "discovered_while_fixing"),
+            Self::Supersedes => write!(f, "supersedes"),
+        }
+    }
+}
+
+impl std::str::FromStr for RelationshipType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().replace('-', "_").as_str() {
+            "duplicate_of" | "duplicate" => Ok(Self::DuplicateOf),
+            "blocks" => Ok(Self::Blocks),
+            "related_to" | "related" => Ok(Self::RelatedTo),
+            "causes" => Ok(Self::Causes),
+            "discovered_while_fixing" | "discovered-while-fixing" => {
+                Ok(Self::DiscoveredWhileFixing)
+            }
+            "supersedes" => Ok(Self::Supersedes),
+            other => Err(format!(
+                "invalid relationship type: '{other}' (valid: duplicate_of, blocks, related_to, \
+                 causes, discovered_while_fixing, supersedes)"
+            )),
+        }
+    }
+}
+
 /// Suppression metadata for findings that should not be re-reported.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Suppression {
@@ -215,7 +249,5 @@ pub enum SuppressionType {
     /// File-level suppression.
     FileLevel,
     /// Inline comment suppression (e.g., `// tally:suppress unsafe-unwrap`).
-    InlineComment {
-        pattern: String,
-    },
+    InlineComment { pattern: String },
 }

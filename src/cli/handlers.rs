@@ -1,7 +1,7 @@
 //! CLI command handler implementations.
 
 use chrono::Utc;
-use comfy_table::{presets::UTF8_FULL_CONDENSED, Table};
+use comfy_table::{Table, presets::UTF8_FULL_CONDENSED};
 use uuid::Uuid;
 
 use crate::error::{Result, TallyError};
@@ -38,6 +38,9 @@ pub struct RecordArgs<'a> {
     pub tags: &'a str,
     pub agent: &'a str,
     pub session: &'a str,
+    pub extra_locations: &'a [String],
+    pub related_to: Option<&'a str>,
+    pub relationship: &'a str,
 }
 
 /// Handle `tally record`.
@@ -51,7 +54,7 @@ pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<
         .parse()
         .map_err(|e: String| TallyError::InvalidSeverity(e))?;
 
-    let location = Location {
+    let primary_location = Location {
         file_path: args.file.to_string(),
         line_start: args.line,
         line_end: args.line_end.unwrap_or(args.line),
@@ -59,7 +62,13 @@ pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<
         message: None,
     };
 
-    let fingerprint = compute_fingerprint(&location, args.rule);
+    // Parse additional locations from --location flags
+    let mut locations = vec![primary_location.clone()];
+    for loc_str in args.extra_locations {
+        locations.push(parse_location_flag(loc_str)?);
+    }
+
+    let fingerprint = compute_fingerprint(&primary_location, args.rule);
 
     let existing = store.load_all().unwrap_or_default();
     let resolver = FindingIdentityResolver::from_findings(&existing);
@@ -70,8 +79,12 @@ pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<
             handle_dedup(store, uuid, args)?;
         }
         IdentityResolution::RelatedFinding { uuid, distance } => {
-            let new_uuid = create_finding(store, severity, location, fingerprint, args)?;
+            let new_uuid = create_finding(store, severity, locations, fingerprint, args)?;
             add_relationship(store, new_uuid, uuid, distance)?;
+            // Also add explicit relationship if requested
+            if let Some(related_id) = args.related_to {
+                add_explicit_relationship(store, new_uuid, related_id, args.relationship)?;
+            }
             print_json(&serde_json::json!({
                 "status": "created",
                 "uuid": new_uuid.to_string(),
@@ -80,7 +93,11 @@ pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<
             }));
         }
         IdentityResolution::NewFinding => {
-            let new_uuid = create_finding(store, severity, location, fingerprint, args)?;
+            let new_uuid = create_finding(store, severity, locations, fingerprint, args)?;
+            // Add explicit relationship if requested
+            if let Some(related_id) = args.related_to {
+                add_explicit_relationship(store, new_uuid, related_id, args.relationship)?;
+            }
             print_json(&serde_json::json!({
                 "status": "created",
                 "uuid": new_uuid.to_string(),
@@ -141,21 +158,26 @@ pub fn handle_query(
     Ok(())
 }
 
+/// Arguments for updating a finding.
+pub struct UpdateArgs<'a> {
+    pub id: &'a str,
+    pub status: &'a str,
+    pub reason: Option<&'a str>,
+    pub commit: Option<&'a str>,
+    pub agent: &'a str,
+    pub related_to: Option<&'a str>,
+    pub relationship: &'a str,
+}
+
 /// Handle `tally update`.
 ///
 /// # Errors
 ///
 /// Returns error if finding not found, transition invalid, or storage fails.
-pub fn handle_update(
-    store: &GitFindingsStore,
-    id_str: &str,
-    status_str: &str,
-    reason: Option<&str>,
-    commit_sha: Option<&str>,
-    agent: &str,
-) -> Result<()> {
-    let uuid = resolve_finding_id(store, id_str)?;
-    let new_status: LifecycleState = status_str
+pub fn handle_update(store: &GitFindingsStore, args: &UpdateArgs<'_>) -> Result<()> {
+    let uuid = resolve_finding_id(store, args.id)?;
+    let new_status: LifecycleState = args
+        .status
         .parse()
         .map_err(|e: String| TallyError::InvalidSeverity(e))?;
 
@@ -173,14 +195,19 @@ pub fn handle_update(
         from: finding.status,
         to: new_status,
         timestamp: Utc::now(),
-        agent_id: agent.to_string(),
-        reason: reason.map(String::from),
-        commit_sha: commit_sha.map(String::from),
+        agent_id: args.agent.to_string(),
+        reason: args.reason.map(String::from),
+        commit_sha: args.commit.map(String::from),
     });
     finding.status = new_status;
     finding.updated_at = Utc::now();
 
     store.save_finding(&finding)?;
+
+    // Add explicit relationship if requested
+    if let Some(related_id) = args.related_to {
+        add_explicit_relationship(store, uuid, related_id, args.relationship)?;
+    }
 
     print_json(&serde_json::json!({
         "uuid": uuid.to_string(),
@@ -265,7 +292,12 @@ pub fn handle_stats(store: &GitFindingsStore) -> Result<()> {
     }
 
     println!("Findings Summary");
-    for sev in [Severity::Critical, Severity::Important, Severity::Suggestion, Severity::TechDebt] {
+    for sev in [
+        Severity::Critical,
+        Severity::Important,
+        Severity::Suggestion,
+        Severity::TechDebt,
+    ] {
         println!("  {sev:<12} {}", by_severity.get(&sev).unwrap_or(&0));
     }
     println!("  Total:       {}", findings.len());
@@ -288,18 +320,13 @@ pub fn handle_stats(store: &GitFindingsStore) -> Result<()> {
 ///
 /// Returns error if storage fails. Individual finding errors are reported
 /// per-item (partial success).
-pub fn handle_record_batch(
-    store: &GitFindingsStore,
-    input_path: &str,
-    agent: &str,
-) -> Result<()> {
+pub fn handle_record_batch(store: &GitFindingsStore, input_path: &str, agent: &str) -> Result<()> {
     use std::io::{self, BufRead};
 
     let reader: Box<dyn BufRead> = if input_path == "-" {
         Box::new(io::stdin().lock())
     } else {
-        let file = std::fs::File::open(input_path)
-            .map_err(TallyError::Io)?;
+        let file = std::fs::File::open(input_path).map_err(TallyError::Io)?;
         Box::new(io::BufReader::new(file))
     };
 
@@ -502,7 +529,7 @@ fn handle_dedup(store: &GitFindingsStore, uuid: Uuid, args: &RecordArgs<'_>) -> 
 fn create_finding(
     store: &GitFindingsStore,
     severity: Severity,
-    location: Location,
+    locations: Vec<Location>,
     fingerprint: String,
     args: &RecordArgs<'_>,
 ) -> Result<Uuid> {
@@ -511,7 +538,7 @@ fn create_finding(
         uuid: new_uuid,
         content_fingerprint: fingerprint,
         rule_id: args.rule.to_string(),
-        locations: vec![location],
+        locations,
         severity,
         category: String::new(),
         tags: parse_tags(args.tags),
@@ -558,6 +585,81 @@ fn add_relationship(
     store.save_finding(&finding)
 }
 
+/// Add an explicit user-specified relationship between findings.
+fn add_explicit_relationship(
+    store: &GitFindingsStore,
+    finding_uuid: Uuid,
+    related_id_str: &str,
+    relationship_str: &str,
+) -> Result<()> {
+    let related_uuid = resolve_finding_id(store, related_id_str)?;
+    let rel_type: RelationshipType = relationship_str
+        .parse()
+        .map_err(|e: String| TallyError::InvalidSeverity(e))?;
+
+    let mut finding = store.load_finding(&finding_uuid)?;
+    finding.relationships.push(FindingRelationship {
+        related_finding_id: related_uuid,
+        relationship_type: rel_type,
+        reason: None,
+        created_at: Utc::now(),
+    });
+    finding.updated_at = Utc::now();
+    store.save_finding(&finding)
+}
+
+/// Parse a `--location` flag value: `file:line_start:line_end:role` or `file:line:role`.
+fn parse_location_flag(s: &str) -> Result<Location> {
+    let parts: Vec<&str> = s.splitn(4, ':').collect();
+    match parts.len() {
+        3 => {
+            // file:line:role
+            let line: u32 = parts[1].parse().map_err(|_| {
+                TallyError::InvalidSeverity(format!("invalid line number in location: {s}"))
+            })?;
+            let role = parse_location_role(parts[2])?;
+            Ok(Location {
+                file_path: parts[0].to_string(),
+                line_start: line,
+                line_end: line,
+                role,
+                message: None,
+            })
+        }
+        4 => {
+            // file:line_start:line_end:role
+            let line_start: u32 = parts[1].parse().map_err(|_| {
+                TallyError::InvalidSeverity(format!("invalid line_start in location: {s}"))
+            })?;
+            let line_end: u32 = parts[2].parse().map_err(|_| {
+                TallyError::InvalidSeverity(format!("invalid line_end in location: {s}"))
+            })?;
+            let role = parse_location_role(parts[3])?;
+            Ok(Location {
+                file_path: parts[0].to_string(),
+                line_start,
+                line_end,
+                role,
+                message: None,
+            })
+        }
+        _ => Err(TallyError::InvalidSeverity(format!(
+            "invalid location format: '{s}' (expected file:line:role or file:line_start:line_end:role)"
+        ))),
+    }
+}
+
+fn parse_location_role(s: &str) -> Result<LocationRole> {
+    match s.to_ascii_lowercase().as_str() {
+        "primary" => Ok(LocationRole::Primary),
+        "secondary" => Ok(LocationRole::Secondary),
+        "context" => Ok(LocationRole::Context),
+        other => Err(TallyError::InvalidSeverity(format!(
+            "invalid location role: '{other}' (valid: primary, secondary, context)"
+        ))),
+    }
+}
+
 fn print_json(value: &impl serde::Serialize) {
     if let Ok(json) = serde_json::to_string_pretty(value) {
         println!("{json}");
@@ -591,7 +693,9 @@ fn print_table(findings: &[Finding], mapper: &SessionIdMapper) {
 
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
-    table.set_header(vec!["ID", "UUID", "Severity", "Status", "File", "Line", "Title"]);
+    table.set_header(vec![
+        "ID", "UUID", "Severity", "Status", "File", "Line", "Title",
+    ]);
 
     for finding in findings {
         let short = mapper.short_id(&finding.uuid).unwrap_or("?");
@@ -623,7 +727,12 @@ fn print_summary(findings: &[Finding]) {
     }
 
     println!("Query Results: {} findings", findings.len());
-    for sev in [Severity::Critical, Severity::Important, Severity::Suggestion, Severity::TechDebt] {
+    for sev in [
+        Severity::Critical,
+        Severity::Important,
+        Severity::Suggestion,
+        Severity::TechDebt,
+    ] {
         if let Some(&count) = by_severity.get(&sev) {
             if count > 0 {
                 println!("  {sev}: {count}");
@@ -650,8 +759,7 @@ fn process_batch_line(
         description: Option<String>,
     }
 
-    let entry: BatchEntry =
-        serde_json::from_str(line).map_err(TallyError::Serialization)?;
+    let entry: BatchEntry = serde_json::from_str(line).map_err(TallyError::Serialization)?;
 
     let severity: Severity = entry
         .severity
@@ -722,12 +830,9 @@ fn export_csv(findings: &[Finding]) -> String {
         "uuid,severity,status,rule_id,file_path,line_start,line_end,title,created_at\n",
     );
     for f in findings {
-        let (file, ls, le) = f
-            .locations
-            .first()
-            .map_or(("", 0, 0), |l| {
-                (l.file_path.as_str(), l.line_start, l.line_end)
-            });
+        let (file, ls, le) = f.locations.first().map_or(("", 0, 0), |l| {
+            (l.file_path.as_str(), l.line_start, l.line_end)
+        });
         let _ = writeln!(
             out,
             "{},{},{},{},{},{},{},{},{}",
@@ -815,10 +920,7 @@ fn export_sarif(findings: &[Finding]) -> String {
 }
 
 /// Import a single finding from dclaude/zclaude JSON format.
-fn import_single_finding(
-    entry: &serde_json::Value,
-    store: &GitFindingsStore,
-) -> Result<Uuid> {
+fn import_single_finding(entry: &serde_json::Value, store: &GitFindingsStore) -> Result<Uuid> {
     let title = entry
         .get("title")
         .and_then(|v| v.as_str())

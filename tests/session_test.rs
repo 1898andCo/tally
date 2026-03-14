@@ -41,9 +41,15 @@ fn assign_tech_debt_gets_td_prefix() {
 #[test]
 fn sequential_same_severity_increments() {
     let mut mapper = SessionIdMapper::new();
-    let short_1 = mapper.assign(Uuid::now_v7(), Severity::Critical).to_string();
-    let short_2 = mapper.assign(Uuid::now_v7(), Severity::Critical).to_string();
-    let short_3 = mapper.assign(Uuid::now_v7(), Severity::Critical).to_string();
+    let short_1 = mapper
+        .assign(Uuid::now_v7(), Severity::Critical)
+        .to_string();
+    let short_2 = mapper
+        .assign(Uuid::now_v7(), Severity::Critical)
+        .to_string();
+    let short_3 = mapper
+        .assign(Uuid::now_v7(), Severity::Critical)
+        .to_string();
     assert_eq!(short_1, "C1");
     assert_eq!(short_2, "C2");
     assert_eq!(short_3, "C3");
@@ -52,9 +58,15 @@ fn sequential_same_severity_increments() {
 #[test]
 fn different_severities_have_independent_counters() {
     let mut mapper = SessionIdMapper::new();
-    let c = mapper.assign(Uuid::now_v7(), Severity::Critical).to_string();
-    let i = mapper.assign(Uuid::now_v7(), Severity::Important).to_string();
-    let s = mapper.assign(Uuid::now_v7(), Severity::Suggestion).to_string();
+    let c = mapper
+        .assign(Uuid::now_v7(), Severity::Critical)
+        .to_string();
+    let i = mapper
+        .assign(Uuid::now_v7(), Severity::Important)
+        .to_string();
+    let s = mapper
+        .assign(Uuid::now_v7(), Severity::Suggestion)
+        .to_string();
     assert_eq!(c, "C1");
     assert_eq!(i, "I1");
     assert_eq!(s, "S1");

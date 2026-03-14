@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use git2::{BranchType, ErrorCode, FileMode, Repository, Signature};
 
-use crate::error::{TallyError, Result};
+use crate::error::{Result, TallyError};
 use crate::model::Finding;
 
 /// Default branch name for findings storage.
@@ -90,7 +90,10 @@ impl GitFindingsStore {
         // Create empty findings directory with a .gitkeep
         let gitkeep_blob = self.repo.blob(b"")?;
 
-        // Build tree: findings/.gitkeep + schema.json
+        // Create .gitattributes for merge strategy
+        let gitattributes_blob = self.repo.blob(b"index.json merge=ours\n")?;
+
+        // Build tree: findings/.gitkeep + schema.json + .gitattributes
         let mut builder = git2::build::TreeUpdateBuilder::new();
         builder.upsert(
             format!("{FINDINGS_DIR}/.gitkeep"),
@@ -98,6 +101,7 @@ impl GitFindingsStore {
             FileMode::Blob,
         );
         builder.upsert("schema.json", schema_blob, FileMode::Blob);
+        builder.upsert(".gitattributes", gitattributes_blob, FileMode::Blob);
 
         // For TreeUpdateBuilder::create_updated we need a baseline tree.
         // Since this is an orphan branch, create an empty tree first.
@@ -137,10 +141,13 @@ impl GitFindingsStore {
     /// or `TallyError::Git`/`TallyError::BranchNotFound` if git operations fail.
     pub fn save_finding(&self, finding: &Finding) -> Result<()> {
         let file_path = format!("{FINDINGS_DIR}/{}.json", finding.uuid);
-        let content = serde_json::to_string_pretty(finding)
-            .map_err(TallyError::Serialization)?;
+        let content = serde_json::to_string_pretty(finding).map_err(TallyError::Serialization)?;
 
-        self.upsert_file(&file_path, content.as_bytes(), &format!("Save finding {}", finding.uuid))
+        self.upsert_file(
+            &file_path,
+            content.as_bytes(),
+            &format!("Save finding {}", finding.uuid),
+        )
     }
 
     /// Load a single finding by UUID.
@@ -152,8 +159,8 @@ impl GitFindingsStore {
     pub fn load_finding(&self, uuid: &uuid::Uuid) -> Result<Finding> {
         let file_path = format!("{FINDINGS_DIR}/{uuid}.json");
         let content = self.read_file(&file_path)?;
-        let finding: Finding = serde_json::from_slice(&content)
-            .map_err(TallyError::Serialization)?;
+        let finding: Finding =
+            serde_json::from_slice(&content).map_err(TallyError::Serialization)?;
         Ok(finding)
     }
 
@@ -169,22 +176,18 @@ impl GitFindingsStore {
         let mut findings = Vec::new();
 
         for name in &filenames {
-            if name == ".gitkeep"
-                || Path::new(name).extension().is_none_or(|ext| ext != "json")
-            {
+            if name == ".gitkeep" || Path::new(name).extension().is_none_or(|ext| ext != "json") {
                 continue;
             }
 
             let file_path = format!("{FINDINGS_DIR}/{name}");
             match self.read_file(&file_path) {
-                Ok(content) => {
-                    match serde_json::from_slice::<Finding>(&content) {
-                        Ok(finding) => findings.push(finding),
-                        Err(e) => {
-                            eprintln!("WARNING: skipping malformed finding {name}: {e}");
-                        }
+                Ok(content) => match serde_json::from_slice::<Finding>(&content) {
+                    Ok(finding) => findings.push(finding),
+                    Err(e) => {
+                        eprintln!("WARNING: skipping malformed finding {name}: {e}");
                     }
-                }
+                },
                 Err(e) => {
                     eprintln!("WARNING: failed to read {name}: {e}");
                 }
@@ -192,6 +195,47 @@ impl GitFindingsStore {
         }
 
         Ok(findings)
+    }
+
+    /// Rebuild the `index.json` file from all finding files.
+    ///
+    /// Scans every `findings/<uuid>.json`, extracts metadata (uuid, severity,
+    /// status, file, rule, fingerprint), and writes a single `index.json` file
+    /// for fast queries. The index is always regenerable from finding files.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TallyError::Git` if git operations fail or branch doesn't exist.
+    pub fn rebuild_index(&self) -> Result<()> {
+        let findings = self.load_all()?;
+
+        let index_entries: Vec<serde_json::Value> = findings
+            .iter()
+            .map(|f| {
+                let primary_file = f.locations.first().map_or("", |l| l.file_path.as_str());
+                serde_json::json!({
+                    "uuid": f.uuid.to_string(),
+                    "severity": f.severity,
+                    "status": f.status,
+                    "rule_id": f.rule_id,
+                    "file_path": primary_file,
+                    "fingerprint": f.content_fingerprint,
+                    "title": f.title,
+                    "created_at": f.created_at.to_rfc3339(),
+                    "updated_at": f.updated_at.to_rfc3339(),
+                })
+            })
+            .collect();
+
+        let index = serde_json::json!({
+            "version": "1.0.0",
+            "count": index_entries.len(),
+            "findings": index_entries,
+        });
+
+        let content = serde_json::to_string_pretty(&index).map_err(TallyError::Serialization)?;
+
+        self.upsert_file("index.json", content.as_bytes(), "Rebuild findings index")
     }
 
     /// Check if the findings branch exists.
@@ -212,6 +256,7 @@ impl GitFindingsStore {
     ///
     /// Returns `TallyError::Git` if remote operations fail (auth, network, etc.).
     /// Returns `TallyError::BranchNotFound` if the local branch doesn't exist.
+    #[allow(clippy::too_many_lines)] // sync has inherent complexity: fetch + merge + push + retry
     pub fn sync(&self, remote_name: &str) -> Result<SyncResult> {
         if !self.branch_exists() {
             return Err(TallyError::BranchNotFound {
@@ -239,7 +284,10 @@ impl GitFindingsStore {
         if let Some(ref remote_commit) = remote_commit {
             if remote_commit.id() != local_commit.id() {
                 // Check if local is ancestor of remote (remote is ahead — fast-forward)
-                if self.repo.graph_descendant_of(remote_commit.id(), local_commit.id())? {
+                if self
+                    .repo
+                    .graph_descendant_of(remote_commit.id(), local_commit.id())?
+                {
                     // Fast-forward local to remote
                     self.repo.reference(
                         &ref_name,
@@ -253,7 +301,10 @@ impl GitFindingsStore {
                         &remote_commit.id().to_string()[..8]
                     );
                     merged = true;
-                } else if self.repo.graph_descendant_of(local_commit.id(), remote_commit.id())? {
+                } else if self
+                    .repo
+                    .graph_descendant_of(local_commit.id(), remote_commit.id())?
+                {
                     // Local is ahead of remote — just push
                     eprintln!("Local is ahead of remote — pushing.");
                 } else {
@@ -337,7 +388,8 @@ impl GitFindingsStore {
 
     /// Get the branch tip commit.
     fn branch_tip(&self) -> Result<git2::Commit<'_>> {
-        let branch = self.repo
+        let branch = self
+            .repo
             .find_branch(&self.branch_name, BranchType::Local)
             .map_err(|_| TallyError::BranchNotFound {
                 branch: self.branch_name.clone(),
@@ -391,14 +443,10 @@ impl GitFindingsStore {
 
         // Retry on ref lock contention
         for attempt in 0..MAX_LOCK_RETRIES {
-            match self.repo.commit(
-                Some(&ref_name),
-                &sig,
-                &sig,
-                message,
-                &new_tree,
-                &[&commit],
-            ) {
+            match self
+                .repo
+                .commit(Some(&ref_name), &sig, &sig, message, &new_tree, &[&commit])
+            {
                 Ok(_) => return Ok(()),
                 Err(e) if e.code() == ErrorCode::Locked && attempt < MAX_LOCK_RETRIES - 1 => {
                     let delay = Duration::from_millis(100 * u64::from(2_u32.pow(attempt)));

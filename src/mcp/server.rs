@@ -7,10 +7,12 @@ use chrono::Utc;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, Content, ErrorCode, Implementation, ProtocolVersion, ServerCapabilities,
-    ServerInfo,
+    Annotated, CallToolResult, Content, ErrorCode, Implementation, ListResourceTemplatesResult,
+    ListResourcesResult, ProtocolVersion, RawResource, RawResourceTemplate,
+    ReadResourceRequestParam, ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo,
 };
-use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -94,6 +96,32 @@ pub struct SuppressFindingInput {
     pub agent: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecordBatchInput {
+    #[schemars(description = "Array of findings to record")]
+    pub findings: Vec<BatchFindingInput>,
+    #[schemars(description = "Agent identifier")]
+    pub agent: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BatchFindingInput {
+    #[schemars(description = "File path")]
+    pub file_path: String,
+    #[schemars(description = "Start line number")]
+    pub line_start: u32,
+    #[schemars(description = "End line number")]
+    pub line_end: Option<u32>,
+    #[schemars(description = "Severity: critical, important, suggestion, tech_debt")]
+    pub severity: String,
+    #[schemars(description = "Short title")]
+    pub title: String,
+    #[schemars(description = "Rule ID")]
+    pub rule_id: String,
+    #[schemars(description = "Description")]
+    pub description: Option<String>,
+}
+
 // --- Output Type ---
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -155,8 +183,13 @@ impl TallyMcpServer {
         let fingerprint = compute_fingerprint(&location, &input.rule_id);
         let existing = store.load_all().unwrap_or_default();
         let resolver = FindingIdentityResolver::from_findings(&existing);
-        let resolution =
-            resolver.resolve(&fingerprint, &input.file_path, input.line_start, &input.rule_id, 5);
+        let resolution = resolver.resolve(
+            &fingerprint,
+            &input.file_path,
+            input.line_start,
+            &input.rule_id,
+            5,
+        );
         let agent = input.agent.as_deref().unwrap_or("mcp-client");
 
         let output = match resolution {
@@ -170,7 +203,8 @@ impl TallyMcpServer {
             },
             IdentityResolution::RelatedFinding { uuid, distance } => {
                 let new_uuid = Uuid::now_v7();
-                let finding = build_finding(new_uuid, fingerprint, &input, severity, location, agent);
+                let finding =
+                    build_finding(new_uuid, fingerprint, &input, severity, location, agent);
                 store.save_finding(&finding).map_err(to_mcp_err)?;
                 ToolOutput {
                     status: "created".into(),
@@ -183,7 +217,8 @@ impl TallyMcpServer {
             }
             IdentityResolution::NewFinding => {
                 let new_uuid = Uuid::now_v7();
-                let finding = build_finding(new_uuid, fingerprint, &input, severity, location, agent);
+                let finding =
+                    build_finding(new_uuid, fingerprint, &input, severity, location, agent);
                 store.save_finding(&finding).map_err(to_mcp_err)?;
                 ToolOutput {
                     status: "created".into(),
@@ -221,7 +256,11 @@ impl TallyMcpServer {
             }
         }
         if let Some(ref pat) = input.file {
-            findings.retain(|f| f.locations.iter().any(|l| l.file_path.contains(pat.as_str())));
+            findings.retain(|f| {
+                f.locations
+                    .iter()
+                    .any(|l| l.file_path.contains(pat.as_str()))
+            });
         }
         if let Some(ref rule) = input.rule {
             findings.retain(|f| f.rule_id == *rule);
@@ -241,11 +280,12 @@ impl TallyMcpServer {
         let input = params.0;
         let store = self.store()?;
         let uuid = parse_uuid_mcp(&input.finding_id)?;
-        let new_status: LifecycleState = input.new_status.parse().map_err(|e: String| McpError {
-            code: ErrorCode::INVALID_REQUEST,
-            message: e.into(),
-            data: None,
-        })?;
+        let new_status: LifecycleState =
+            input.new_status.parse().map_err(|e: String| McpError {
+                code: ErrorCode::INVALID_REQUEST,
+                message: e.into(),
+                data: None,
+            })?;
 
         let mut finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
         if !finding.status.can_transition_to(new_status) {
@@ -255,10 +295,15 @@ impl TallyMcpServer {
                     "Invalid transition: {} -> {} (valid: {})",
                     finding.status,
                     new_status,
-                    finding.status.allowed_transitions().iter()
+                    finding
+                        .status
+                        .allowed_transitions()
+                        .iter()
                         .map(std::string::ToString::to_string)
-                        .collect::<Vec<_>>().join(", ")
-                ).into(),
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+                .into(),
                 data: None,
             });
         }
@@ -279,8 +324,12 @@ impl TallyMcpServer {
             serde_json::to_string_pretty(&ToolOutput {
                 status: finding.status.to_string(),
                 uuid: Some(uuid.to_string()),
-                message: None, related_to: None, distance: None, expires_at: None,
-            }).unwrap_or_default(),
+                message: None,
+                related_to: None,
+                distance: None,
+                expires_at: None,
+            })
+            .unwrap_or_default(),
         )]))
     }
 
@@ -295,6 +344,49 @@ impl TallyMcpServer {
         let finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&finding).unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(description = "Record multiple findings in batch (partial success semantics)")]
+    async fn record_batch(
+        &self,
+        params: Parameters<RecordBatchInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+        let existing = store.load_all().unwrap_or_default();
+        let resolver = FindingIdentityResolver::from_findings(&existing);
+        let agent = input.agent.as_deref().unwrap_or("mcp-client");
+
+        let mut total = 0u32;
+        let mut succeeded = 0u32;
+        let mut failed = 0u32;
+        let mut results: Vec<serde_json::Value> = Vec::new();
+
+        for (idx, entry) in input.findings.iter().enumerate() {
+            total += 1;
+            match record_batch_entry(&store, &resolver, entry, agent) {
+                Ok(result) => {
+                    succeeded += 1;
+                    results
+                        .push(serde_json::json!({"index": idx, "status": "ok", "result": result}));
+                }
+                Err(e) => {
+                    failed += 1;
+                    results.push(serde_json::json!({"index": idx, "status": "error", "error": e}));
+                }
+            }
+        }
+
+        let output = serde_json::json!({
+            "total": total,
+            "succeeded": succeeded,
+            "failed": failed,
+            "results": results,
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&output).unwrap_or_default(),
         )]))
     }
 
@@ -316,12 +408,16 @@ impl TallyMcpServer {
             });
         }
 
-        let expires_at = input.expires_at.as_deref()
-            .map(|s| s.parse::<chrono::DateTime<Utc>>().map_err(|e| McpError {
-                code: ErrorCode::INVALID_REQUEST,
-                message: format!("Invalid date: {e}").into(),
-                data: None,
-            }))
+        let expires_at = input
+            .expires_at
+            .as_deref()
+            .map(|s| {
+                s.parse::<chrono::DateTime<Utc>>().map_err(|e| McpError {
+                    code: ErrorCode::INVALID_REQUEST,
+                    message: format!("Invalid date: {e}").into(),
+                    data: None,
+                })
+            })
             .transpose()?;
 
         finding.state_history.push(StateTransition {
@@ -346,9 +442,12 @@ impl TallyMcpServer {
             serde_json::to_string_pretty(&ToolOutput {
                 status: "suppressed".into(),
                 uuid: Some(uuid.to_string()),
-                message: None, related_to: None, distance: None,
+                message: None,
+                related_to: None,
+                distance: None,
                 expires_at: expires_at.map(|d| d.to_rfc3339()),
-            }).unwrap_or_default(),
+            })
+            .unwrap_or_default(),
         )]))
     }
 }
@@ -358,7 +457,10 @@ impl ServerHandler for TallyMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
             server_info: Implementation {
                 name: "tally".into(),
                 title: None,
@@ -366,8 +468,82 @@ impl ServerHandler for TallyMcpServer {
                 icons: None,
                 website_url: None,
             },
-            instructions: Some("Git-backed findings tracker for AI coding agents. Tools: record_finding, query_findings, update_finding_status, get_finding_context, suppress_finding.".into()),
+            instructions: Some("Git-backed findings tracker for AI coding agents. Tools: record_finding, record_batch, query_findings, update_finding_status, get_finding_context, suppress_finding. Resources: findings://summary, findings://file/{path}, findings://detail/{uuid}.".into()),
         }
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        let mut resource = RawResource::new("findings://summary", "Findings Summary");
+        resource.description = Some("Counts by severity/status, 10 most recent findings".into());
+        resource.mime_type = Some("application/json".into());
+
+        Ok(ListResourcesResult {
+            next_cursor: None,
+            resources: vec![Annotated::new(resource, None)],
+        })
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, McpError> {
+        Ok(ListResourceTemplatesResult {
+            next_cursor: None,
+            resource_templates: vec![
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://file/{path}".into(),
+                        name: "Findings by File".into(),
+                        title: None,
+                        description: Some("All findings in a specific file".into()),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://detail/{uuid}".into(),
+                        name: "Finding Detail".into(),
+                        title: None,
+                        description: Some("Full finding with history and code context".into()),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
+            ],
+        })
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        let store = self.store()?;
+        let uri = &request.uri;
+
+        let content = if uri == "findings://summary" {
+            read_resource_summary(&store)?
+        } else if let Some(path) = uri.strip_prefix("findings://file/") {
+            read_resource_file(&store, path)?
+        } else if let Some(uuid_str) = uri.strip_prefix("findings://detail/") {
+            read_resource_detail(&store, uuid_str)?
+        } else {
+            return Err(McpError {
+                code: ErrorCode::INVALID_REQUEST,
+                message: format!("Unknown resource URI: {uri}").into(),
+                data: None,
+            });
+        };
+
+        Ok(ReadResourceResult {
+            contents: vec![ResourceContents::text(content, uri)],
+        })
     }
 }
 
@@ -388,6 +564,72 @@ fn parse_uuid_mcp(id: &str) -> Result<Uuid, McpError> {
         message: format!("Invalid UUID: {id}").into(),
         data: None,
     })
+}
+
+fn record_batch_entry(
+    store: &GitFindingsStore,
+    resolver: &FindingIdentityResolver,
+    entry: &BatchFindingInput,
+    agent: &str,
+) -> Result<serde_json::Value, String> {
+    let severity: Severity = entry.severity.parse().map_err(|e: String| e)?;
+
+    let location = Location {
+        file_path: entry.file_path.clone(),
+        line_start: entry.line_start,
+        line_end: entry.line_end.unwrap_or(entry.line_start),
+        role: LocationRole::Primary,
+        message: None,
+    };
+
+    let fingerprint = compute_fingerprint(&location, &entry.rule_id);
+    let resolution = resolver.resolve(
+        &fingerprint,
+        &entry.file_path,
+        entry.line_start,
+        &entry.rule_id,
+        5,
+    );
+
+    match resolution {
+        IdentityResolution::ExistingFinding { uuid } => {
+            Ok(serde_json::json!({"status": "deduplicated", "uuid": uuid.to_string()}))
+        }
+        IdentityResolution::NewFinding | IdentityResolution::RelatedFinding { .. } => {
+            let new_uuid = Uuid::now_v7();
+            let finding = Finding {
+                uuid: new_uuid,
+                content_fingerprint: fingerprint,
+                rule_id: entry.rule_id.clone(),
+                locations: vec![location],
+                severity,
+                category: String::new(),
+                tags: vec![],
+                title: entry.title.clone(),
+                description: entry.description.clone().unwrap_or_default(),
+                suggested_fix: None,
+                evidence: None,
+                status: LifecycleState::Open,
+                state_history: vec![],
+                discovered_by: vec![AgentRecord {
+                    agent_id: agent.to_string(),
+                    session_id: String::new(),
+                    detected_at: Utc::now(),
+                    session_short_id: None,
+                }],
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                repo_id: String::new(),
+                branch: None,
+                pr_number: None,
+                commit_sha: None,
+                relationships: vec![],
+                suppression: None,
+            };
+            store.save_finding(&finding).map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({"status": "created", "uuid": new_uuid.to_string()}))
+        }
+    }
 }
 
 fn build_finding(
@@ -427,6 +669,73 @@ fn build_finding(
         relationships: vec![],
         suppression: None,
     }
+}
+
+fn read_resource_summary(store: &GitFindingsStore) -> Result<String, McpError> {
+    let findings = store.load_all().map_err(to_mcp_err)?;
+
+    let mut by_severity = std::collections::HashMap::new();
+    let mut by_status = std::collections::HashMap::new();
+    for f in &findings {
+        *by_severity.entry(f.severity.to_string()).or_insert(0u32) += 1;
+        *by_status.entry(f.status.to_string()).or_insert(0u32) += 1;
+    }
+
+    // 10 most recent findings
+    let mut recent = findings;
+    recent.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    recent.truncate(10);
+
+    let recent_summaries: Vec<serde_json::Value> = recent
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "uuid": f.uuid.to_string(),
+                "title": f.title,
+                "severity": f.severity,
+                "status": f.status,
+                "created_at": f.created_at.to_rfc3339(),
+            })
+        })
+        .collect();
+
+    let summary = serde_json::json!({
+        "total": recent_summaries.len(),
+        "by_severity": by_severity,
+        "by_status": by_status,
+        "recent": recent_summaries,
+    });
+
+    serde_json::to_string_pretty(&summary).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+fn read_resource_file(store: &GitFindingsStore, path: &str) -> Result<String, McpError> {
+    let findings = store.load_all().map_err(to_mcp_err)?;
+    let matched: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.locations.iter().any(|l| l.file_path.contains(path)))
+        .collect();
+
+    serde_json::to_string_pretty(&matched).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+fn read_resource_detail(store: &GitFindingsStore, uuid_str: &str) -> Result<String, McpError> {
+    let uuid = parse_uuid_mcp(uuid_str)?;
+    let finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
+
+    serde_json::to_string_pretty(&finding).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
 }
 
 /// Run the MCP server on stdio.

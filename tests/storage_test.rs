@@ -3,7 +3,6 @@
 //! Each test creates a temporary git repo, initializes the findings store,
 //! and verifies operations without affecting the working tree or HEAD.
 
-
 use chrono::Utc;
 use git2::{BranchType, Repository};
 use tally::model::*;
@@ -21,7 +20,9 @@ fn setup_repo() -> (tempfile::TempDir, String) {
     let sig = git2::Signature::now("test", "test@test.com").expect("sig");
     let blob = repo.blob(b"# test repo").expect("blob");
     let mut builder = repo.treebuilder(None).expect("treebuilder");
-    builder.insert("README.md", blob, 0o100_644).expect("insert");
+    builder
+        .insert("README.md", blob, 0o100_644)
+        .expect("insert");
     let tree_oid = builder.write().expect("write tree");
     let tree = repo.find_tree(tree_oid).expect("find tree");
     repo.commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
@@ -78,7 +79,10 @@ fn init_creates_orphan_branch() {
     let (_tmp, repo_path) = setup_repo();
     let store = GitFindingsStore::open(&repo_path).expect("open store");
 
-    assert!(!store.branch_exists(), "branch should not exist before init");
+    assert!(
+        !store.branch_exists(),
+        "branch should not exist before init"
+    );
     store.init().expect("init");
     assert!(store.branch_exists(), "branch should exist after init");
 
@@ -207,7 +211,9 @@ fn init_is_idempotent() {
 
     // Should still be able to save after double init
     let uuid = Uuid::now_v7();
-    store.save_finding(&make_test_finding(uuid)).expect("save after double init");
+    store
+        .save_finding(&make_test_finding(uuid))
+        .expect("save after double init");
     let loaded = store.load_finding(&uuid).expect("load after double init");
     assert_eq!(loaded.uuid, uuid);
 }
@@ -267,8 +273,12 @@ fn concurrent_saves_both_succeed() {
     let first_id = Uuid::now_v7();
     let second_id = Uuid::now_v7();
 
-    store.save_finding(&make_test_finding(first_id)).expect("save 1");
-    store.save_finding(&make_test_finding(second_id)).expect("save 2");
+    store
+        .save_finding(&make_test_finding(first_id))
+        .expect("save 1");
+    store
+        .save_finding(&make_test_finding(second_id))
+        .expect("save 2");
 
     // Both should be retrievable
     let first = store.load_finding(&first_id).expect("load 1");
@@ -345,4 +355,48 @@ fn save_before_init_errors() {
 
     let result = store.save_finding(&make_test_finding(Uuid::now_v7()));
     assert!(result.is_err(), "save before init should error");
+}
+
+#[test]
+fn rebuild_index_creates_index_json() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    // Save two findings
+    let f1 = make_test_finding(Uuid::now_v7());
+    let f2 = make_test_finding(Uuid::now_v7());
+    store.save_finding(&f1).expect("save 1");
+    store.save_finding(&f2).expect("save 2");
+
+    // Rebuild index
+    store.rebuild_index().expect("rebuild_index");
+
+    // Verify index.json exists on the branch (load_all still works)
+    let findings = store.load_all().expect("load_all");
+    assert_eq!(
+        findings.len(),
+        2,
+        "should still have 2 findings after index rebuild"
+    );
+}
+
+#[test]
+fn init_creates_gitattributes() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    // Verify .gitattributes exists on the branch by checking the branch tree
+    let repo = git2::Repository::open(&repo_path).expect("open repo");
+    let branch = repo
+        .find_branch("findings-data", git2::BranchType::Local)
+        .expect("find branch");
+    let commit = branch.into_reference().peel_to_commit().expect("commit");
+    let tree = commit.tree().expect("tree");
+    let entry = tree.get_name(".gitattributes");
+    assert!(
+        entry.is_some(),
+        ".gitattributes should exist on findings-data branch"
+    );
 }

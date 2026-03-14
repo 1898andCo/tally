@@ -8,10 +8,7 @@ use tally::model::*;
 
 /// Helper to assert a transition is valid.
 fn assert_valid(from: LifecycleState, to: LifecycleState) {
-    assert!(
-        from.can_transition_to(to),
-        "{from} -> {to} should be valid"
-    );
+    assert!(from.can_transition_to(to), "{from} -> {to} should be valid");
 }
 
 #[test]
@@ -217,11 +214,26 @@ fn severity_sarif_mapping() {
 
 #[test]
 fn severity_from_str_valid() {
-    assert_eq!("critical".parse::<Severity>().expect("parse"), Severity::Critical);
-    assert_eq!("IMPORTANT".parse::<Severity>().expect("parse"), Severity::Important);
-    assert_eq!("tech-debt".parse::<Severity>().expect("parse"), Severity::TechDebt);
-    assert_eq!("tech_debt".parse::<Severity>().expect("parse"), Severity::TechDebt);
-    assert_eq!("techdebt".parse::<Severity>().expect("parse"), Severity::TechDebt);
+    assert_eq!(
+        "critical".parse::<Severity>().expect("parse"),
+        Severity::Critical
+    );
+    assert_eq!(
+        "IMPORTANT".parse::<Severity>().expect("parse"),
+        Severity::Important
+    );
+    assert_eq!(
+        "tech-debt".parse::<Severity>().expect("parse"),
+        Severity::TechDebt
+    );
+    assert_eq!(
+        "tech_debt".parse::<Severity>().expect("parse"),
+        Severity::TechDebt
+    );
+    assert_eq!(
+        "techdebt".parse::<Severity>().expect("parse"),
+        Severity::TechDebt
+    );
 }
 
 #[test]
@@ -233,11 +245,26 @@ fn severity_from_str_invalid() {
 
 #[test]
 fn lifecycle_from_str_valid() {
-    assert_eq!("open".parse::<LifecycleState>().expect("parse"), LifecycleState::Open);
-    assert_eq!("in-progress".parse::<LifecycleState>().expect("parse"), LifecycleState::InProgress);
-    assert_eq!("in_progress".parse::<LifecycleState>().expect("parse"), LifecycleState::InProgress);
-    assert_eq!("false_positive".parse::<LifecycleState>().expect("parse"), LifecycleState::FalsePositive);
-    assert_eq!("WONT_FIX".parse::<LifecycleState>().expect("parse"), LifecycleState::WontFix);
+    assert_eq!(
+        "open".parse::<LifecycleState>().expect("parse"),
+        LifecycleState::Open
+    );
+    assert_eq!(
+        "in-progress".parse::<LifecycleState>().expect("parse"),
+        LifecycleState::InProgress
+    );
+    assert_eq!(
+        "in_progress".parse::<LifecycleState>().expect("parse"),
+        LifecycleState::InProgress
+    );
+    assert_eq!(
+        "false_positive".parse::<LifecycleState>().expect("parse"),
+        LifecycleState::FalsePositive
+    );
+    assert_eq!(
+        "WONT_FIX".parse::<LifecycleState>().expect("parse"),
+        LifecycleState::WontFix
+    );
 }
 
 #[test]

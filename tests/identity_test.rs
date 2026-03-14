@@ -41,7 +41,10 @@ fn fingerprint_changes_with_file() {
 
     let fp_a = compute_fingerprint(&loc_a, "unsafe-unwrap");
     let fp_b = compute_fingerprint(&loc_b, "unsafe-unwrap");
-    assert_ne!(fp_a, fp_b, "different files should produce different fingerprints");
+    assert_ne!(
+        fp_a, fp_b,
+        "different files should produce different fingerprints"
+    );
 }
 
 #[test]
@@ -63,7 +66,10 @@ fn fingerprint_changes_with_line() {
 
     let fp_a = compute_fingerprint(&loc_a, "unsafe-unwrap");
     let fp_b = compute_fingerprint(&loc_b, "unsafe-unwrap");
-    assert_ne!(fp_a, fp_b, "different lines should produce different fingerprints");
+    assert_ne!(
+        fp_a, fp_b,
+        "different lines should produce different fingerprints"
+    );
 }
 
 #[test]
@@ -78,7 +84,10 @@ fn fingerprint_changes_with_rule() {
 
     let fp_a = compute_fingerprint(&loc, "unsafe-unwrap");
     let fp_b = compute_fingerprint(&loc, "sql-injection");
-    assert_ne!(fp_a, fp_b, "different rules should produce different fingerprints");
+    assert_ne!(
+        fp_a, fp_b,
+        "different rules should produce different fingerprints"
+    );
 }
 
 #[test]
@@ -92,7 +101,10 @@ fn fingerprint_starts_with_sha256_prefix() {
     };
 
     let fp = compute_fingerprint(&loc, "unsafe-unwrap");
-    assert!(fp.starts_with("sha256:"), "fingerprint should start with sha256: prefix");
+    assert!(
+        fp.starts_with("sha256:"),
+        "fingerprint should start with sha256: prefix"
+    );
     assert_eq!(fp.len(), 7 + 64, "sha256: prefix + 64 hex chars");
 }
 
@@ -173,10 +185,7 @@ fn resolve_related_by_proximity() {
     let result = resolver.resolve(&fp, "src/main.rs", 45, "unsafe-unwrap", 5);
     assert_eq!(
         result,
-        IdentityResolution::RelatedFinding {
-            uuid,
-            distance: 3
-        }
+        IdentityResolution::RelatedFinding { uuid, distance: 3 }
     );
 }
 

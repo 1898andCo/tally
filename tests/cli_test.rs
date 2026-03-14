@@ -13,7 +13,9 @@ fn setup_cli_repo() -> tempfile::TempDir {
     let sig = git2::Signature::now("test", "test@test.com").expect("sig");
     let blob = repo.blob(b"# test").expect("blob");
     let mut builder = repo.treebuilder(None).expect("tb");
-    builder.insert("README.md", blob, 0o100_644).expect("insert");
+    builder
+        .insert("README.md", blob, 0o100_644)
+        .expect("insert");
     let tree_oid = builder.write().expect("write");
     let tree = repo.find_tree(tree_oid).expect("find tree");
     repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
@@ -57,23 +59,40 @@ fn cli_init_succeeds() {
 #[test]
 fn cli_init_is_idempotent() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 }
 
 #[test]
 fn cli_record_creates_finding() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     tally()
         .args([
             "record",
-            "--file", "src/main.rs",
-            "--line", "42",
-            "--severity", "important",
-            "--title", "unwrap on Option",
-            "--rule", "unsafe-unwrap",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "important",
+            "--title",
+            "unwrap on Option",
+            "--rule",
+            "unsafe-unwrap",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -85,18 +104,27 @@ fn cli_record_creates_finding() {
 #[test]
 fn cli_record_deduplicates() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     // Record same finding twice
     for _ in 0..2 {
         tally()
             .args([
                 "record",
-                "--file", "src/main.rs",
-                "--line", "42",
-                "--severity", "important",
-                "--title", "unwrap on Option",
-                "--rule", "unsafe-unwrap",
+                "--file",
+                "src/main.rs",
+                "--line",
+                "42",
+                "--severity",
+                "important",
+                "--title",
+                "unwrap on Option",
+                "--rule",
+                "unsafe-unwrap",
             ])
             .current_dir(tmp.path())
             .assert()
@@ -107,11 +135,16 @@ fn cli_record_deduplicates() {
     let output = tally()
         .args([
             "record",
-            "--file", "src/main.rs",
-            "--line", "42",
-            "--severity", "important",
-            "--title", "unwrap on Option",
-            "--rule", "unsafe-unwrap",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "important",
+            "--title",
+            "unwrap on Option",
+            "--rule",
+            "unsafe-unwrap",
         ])
         .current_dir(tmp.path())
         .output()
@@ -127,17 +160,26 @@ fn cli_record_deduplicates() {
 #[test]
 fn cli_query_json_returns_array() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     // Record a finding
     tally()
         .args([
             "record",
-            "--file", "src/main.rs",
-            "--line", "42",
-            "--severity", "critical",
-            "--title", "sql injection",
-            "--rule", "sql-injection",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "critical",
+            "--title",
+            "sql injection",
+            "--rule",
+            "sql-injection",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -156,7 +198,11 @@ fn cli_query_json_returns_array() {
 #[test]
 fn cli_query_empty_returns_empty_array() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     tally()
         .args(["query", "--format", "json"])
@@ -169,16 +215,25 @@ fn cli_query_empty_returns_empty_array() {
 #[test]
 fn cli_query_table_format() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     tally()
         .args([
             "record",
-            "--file", "src/main.rs",
-            "--line", "42",
-            "--severity", "important",
-            "--title", "test finding",
-            "--rule", "test-rule",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "important",
+            "--title",
+            "test finding",
+            "--rule",
+            "test-rule",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -196,13 +251,25 @@ fn cli_query_table_format() {
 #[test]
 fn cli_stats_shows_counts() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     tally()
         .args([
             "record",
-            "--file", "a.rs", "--line", "1",
-            "--severity", "critical", "--title", "a", "--rule", "r",
+            "--file",
+            "a.rs",
+            "--line",
+            "1",
+            "--severity",
+            "critical",
+            "--title",
+            "a",
+            "--rule",
+            "r",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -210,8 +277,16 @@ fn cli_stats_shows_counts() {
     tally()
         .args([
             "record",
-            "--file", "b.rs", "--line", "2",
-            "--severity", "suggestion", "--title", "b", "--rule", "s",
+            "--file",
+            "b.rs",
+            "--line",
+            "2",
+            "--severity",
+            "suggestion",
+            "--title",
+            "b",
+            "--rule",
+            "s",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -236,10 +311,16 @@ fn cli_record_before_init_fails() {
     tally()
         .args([
             "record",
-            "--file", "src/main.rs",
-            "--line", "42",
-            "--severity", "important",
-            "--title", "test", "--rule", "test",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "important",
+            "--title",
+            "test",
+            "--rule",
+            "test",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -250,15 +331,25 @@ fn cli_record_before_init_fails() {
 #[test]
 fn cli_record_invalid_severity_fails() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     tally()
         .args([
             "record",
-            "--file", "src/main.rs",
-            "--line", "42",
-            "--severity", "ultra-critical",
-            "--title", "test", "--rule", "test",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "ultra-critical",
+            "--title",
+            "test",
+            "--rule",
+            "test",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -269,16 +360,26 @@ fn cli_record_invalid_severity_fails() {
 #[test]
 fn cli_update_invalid_transition_fails() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     // Record a finding
     let output = tally()
         .args([
             "record",
-            "--file", "src/main.rs",
-            "--line", "42",
-            "--severity", "important",
-            "--title", "test", "--rule", "test",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "important",
+            "--title",
+            "test",
+            "--rule",
+            "test",
         ])
         .current_dir(tmp.path())
         .output()
@@ -300,16 +401,25 @@ fn cli_update_invalid_transition_fails() {
 #[test]
 fn cli_query_json_includes_short_id() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     tally()
         .args([
             "record",
-            "--file", "src/main.rs",
-            "--line", "42",
-            "--severity", "critical",
-            "--title", "test",
-            "--rule", "test-rule",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "critical",
+            "--title",
+            "test",
+            "--rule",
+            "test-rule",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -326,16 +436,25 @@ fn cli_query_json_includes_short_id() {
 #[test]
 fn cli_query_table_includes_short_id_column() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     tally()
         .args([
             "record",
-            "--file", "src/main.rs",
-            "--line", "42",
-            "--severity", "important",
-            "--title", "test",
-            "--rule", "test-rule",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "important",
+            "--title",
+            "test",
+            "--rule",
+            "test-rule",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -352,7 +471,11 @@ fn cli_query_table_includes_short_id_column() {
 #[test]
 fn cli_record_batch_from_file() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     // Create a JSONL batch file
     let batch = tmp.path().join("batch.jsonl");
@@ -377,7 +500,11 @@ fn cli_record_batch_from_file() {
 #[test]
 fn cli_record_batch_partial_success() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     let batch = tmp.path().join("batch.jsonl");
     std::fs::write(
@@ -401,12 +528,25 @@ fn cli_record_batch_partial_success() {
 #[test]
 fn cli_export_sarif() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     tally()
         .args([
-            "record", "--file", "src/main.rs", "--line", "42",
-            "--severity", "critical", "--title", "test", "--rule", "test-rule",
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "critical",
+            "--title",
+            "test",
+            "--rule",
+            "test-rule",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -425,12 +565,25 @@ fn cli_export_sarif() {
 #[test]
 fn cli_export_csv() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     tally()
         .args([
-            "record", "--file", "src/main.rs", "--line", "42",
-            "--severity", "important", "--title", "csv test", "--rule", "csv-rule",
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "important",
+            "--title",
+            "csv test",
+            "--rule",
+            "csv-rule",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -448,12 +601,25 @@ fn cli_export_csv() {
 #[test]
 fn cli_export_to_file() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     tally()
         .args([
-            "record", "--file", "a.rs", "--line", "1",
-            "--severity", "suggestion", "--title", "t", "--rule", "r",
+            "record",
+            "--file",
+            "a.rs",
+            "--line",
+            "1",
+            "--severity",
+            "suggestion",
+            "--title",
+            "t",
+            "--rule",
+            "r",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -461,13 +627,22 @@ fn cli_export_to_file() {
 
     let output_file = tmp.path().join("findings.json");
     tally()
-        .args(["export", "--format", "json", "--output", output_file.to_str().expect("p")])
+        .args([
+            "export",
+            "--format",
+            "json",
+            "--output",
+            output_file.to_str().expect("p"),
+        ])
         .current_dir(tmp.path())
         .assert()
         .success();
 
     let content = std::fs::read_to_string(&output_file).expect("read");
-    assert!(content.contains("suggestion"), "exported file should contain findings");
+    assert!(
+        content.contains("suggestion"),
+        "exported file should contain findings"
+    );
 }
 
 // --- Negative ---
@@ -475,7 +650,11 @@ fn cli_export_to_file() {
 #[test]
 fn cli_record_batch_empty_file() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     let batch = tmp.path().join("empty.jsonl");
     std::fs::write(&batch, "").expect("write empty");
@@ -491,7 +670,11 @@ fn cli_record_batch_empty_file() {
 #[test]
 fn cli_import_dclaude_format() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     // Create a mock dclaude state file
     let state_file = tmp.path().join("pr-review.json");
@@ -528,7 +711,11 @@ fn cli_import_dclaude_format() {
 #[test]
 fn cli_import_zclaude_format() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     let state_file = tmp.path().join("zclaude-review.json");
     std::fs::write(
@@ -556,7 +743,11 @@ fn cli_import_zclaude_format() {
 #[test]
 fn cli_import_empty_file_no_error() {
     let tmp = setup_cli_repo();
-    tally().arg("init").current_dir(tmp.path()).assert().success();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
 
     let state_file = tmp.path().join("empty.json");
     std::fs::write(&state_file, "{}").expect("write");
@@ -590,4 +781,296 @@ fn cli_outside_git_repo_fails() {
         .current_dir(tmp.path())
         .assert()
         .failure();
+}
+
+// =============================================================================
+// AC-13: Multi-file findings
+// =============================================================================
+
+#[test]
+fn cli_record_with_additional_location() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/spec.md",
+            "--line",
+            "42",
+            "--severity",
+            "important",
+            "--title",
+            "spec-code mismatch",
+            "--rule",
+            "spec-drift",
+            "--location",
+            "src/code.rs:100:secondary",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"status\": \"created\""));
+
+    // Query back and verify both locations present
+    let output = tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("src/spec.md"),
+        "should have primary location"
+    );
+    assert!(
+        stdout.contains("src/code.rs"),
+        "should have secondary location"
+    );
+}
+
+#[test]
+fn cli_record_with_multiple_locations() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/api.rs",
+            "--line",
+            "10",
+            "--severity",
+            "critical",
+            "--title",
+            "cross-file issue",
+            "--rule",
+            "consistency",
+            "--location",
+            "src/types.rs:20:30:secondary",
+            "--location",
+            "docs/spec.md:5:context",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("src/api.rs"), "primary location");
+    assert!(stdout.contains("src/types.rs"), "secondary location");
+    assert!(stdout.contains("docs/spec.md"), "context location");
+}
+
+#[test]
+fn cli_sarif_export_includes_multiple_locations() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "10",
+            "--severity",
+            "important",
+            "--title",
+            "multi-loc",
+            "--rule",
+            "test-rule",
+            "--location",
+            "src/other.rs:20:secondary",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    let output = tally()
+        .args(["export", "--format", "sarif"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("export");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("src/main.rs"), "SARIF should have primary");
+    assert!(
+        stdout.contains("src/other.rs"),
+        "SARIF should have secondary"
+    );
+}
+
+// =============================================================================
+// AC-14: Finding relationships
+// =============================================================================
+
+#[test]
+fn cli_record_with_relationship() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Record first finding
+    let output = tally()
+        .args([
+            "record",
+            "--file",
+            "src/a.rs",
+            "--line",
+            "1",
+            "--severity",
+            "critical",
+            "--title",
+            "finding A",
+            "--rule",
+            "rule-a",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("parse");
+    let uuid_a = json["uuid"].as_str().expect("uuid");
+
+    // Record second finding related to first
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/b.rs",
+            "--line",
+            "2",
+            "--severity",
+            "important",
+            "--title",
+            "finding B",
+            "--rule",
+            "rule-b",
+            "--related-to",
+            uuid_a,
+            "--relationship",
+            "discovered_while_fixing",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"status\": \"created\""));
+
+    // Query and verify relationship exists
+    let output = tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("discovered_while_fixing"),
+        "should have relationship type in output"
+    );
+}
+
+#[test]
+fn cli_update_with_relationship() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Record two findings
+    let output_a = tally()
+        .args([
+            "record",
+            "--file",
+            "src/a.rs",
+            "--line",
+            "1",
+            "--severity",
+            "critical",
+            "--title",
+            "A",
+            "--rule",
+            "r",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run");
+    let json_a: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output_a.stdout)).expect("parse");
+    let uuid_a = json_a["uuid"].as_str().expect("uuid");
+
+    let output_b = tally()
+        .args([
+            "record",
+            "--file",
+            "src/b.rs",
+            "--line",
+            "2",
+            "--severity",
+            "important",
+            "--title",
+            "B",
+            "--rule",
+            "r2",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run");
+    let json_b: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output_b.stdout)).expect("parse");
+    let uuid_b = json_b["uuid"].as_str().expect("uuid");
+
+    // Update B with relationship to A
+    tally()
+        .args([
+            "update",
+            uuid_b,
+            "--status",
+            "acknowledged",
+            "--related-to",
+            uuid_a,
+            "--relationship",
+            "blocks",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+}
+
+#[test]
+fn cli_all_relationship_types_parse() {
+    // Verify all 6 relationship types parse correctly
+    for rel_type in [
+        "duplicate_of",
+        "blocks",
+        "related_to",
+        "causes",
+        "discovered_while_fixing",
+        "supersedes",
+    ] {
+        let result: Result<tally::model::RelationshipType, _> = rel_type.parse();
+        assert!(result.is_ok(), "should parse relationship type: {rel_type}");
+    }
 }

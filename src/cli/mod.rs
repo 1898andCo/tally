@@ -58,6 +58,19 @@ pub enum Command {
         /// Session identifier.
         #[arg(long, default_value = "")]
         session: String,
+
+        /// Additional locations (format: `file:line_start:line_end:role`).
+        /// Role is primary, secondary, or context. Can be repeated.
+        #[arg(long)]
+        location: Vec<String>,
+
+        /// Related finding ID (UUID or short ID like C1).
+        #[arg(long)]
+        related_to: Option<String>,
+
+        /// Relationship type (used with `--related-to`).
+        #[arg(long, default_value = "related_to")]
+        relationship: String,
     },
 
     /// Query findings with filters.
@@ -107,6 +120,14 @@ pub enum Command {
         /// Agent performing the update.
         #[arg(long, default_value = "cli")]
         agent: String,
+
+        /// Add relationship to another finding (UUID or short ID).
+        #[arg(long)]
+        related_to: Option<String>,
+
+        /// Relationship type (used with --related-to).
+        #[arg(long, default_value = "related_to")]
+        relationship: String,
     },
 
     /// Suppress a finding.
