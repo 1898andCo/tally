@@ -28,6 +28,82 @@ const FINDINGS_DIR: &str = "findings";
 /// Max retry attempts for ref lock contention.
 const MAX_LOCK_RETRIES: u32 = 3;
 
+/// Build `RemoteCallbacks` with a credential chain:
+/// 1. git credential helper (`~/.gitconfig` — osxkeychain, `gh auth setup-git`, etc.)
+/// 2. `GITHUB_TOKEN` / `GIT_TOKEN` environment variable
+/// 3. SSH agent
+///
+/// Tracks attempt count to avoid libgit2's infinite retry loop.
+fn build_remote_callbacks() -> git2::RemoteCallbacks<'static> {
+    let attempts = std::cell::Cell::new(0u32);
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.credentials(move |url, username_from_url, allowed_types| {
+        let attempt = attempts.get();
+        if attempt >= 3 {
+            return Err(git2::Error::from_str(
+                "Authentication failed: exhausted all credential strategies",
+            ));
+        }
+        attempts.set(attempt + 1);
+
+        let username = username_from_url.unwrap_or("git");
+
+        // Strategy 1: git credential helper
+        if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
+            if let Ok(config) = git2::Config::open_default() {
+                if let Ok(cred) = git2::Cred::credential_helper(&config, url, username_from_url) {
+                    return Ok(cred);
+                }
+            }
+
+            // Strategy 2: environment variable
+            if let Ok(token) = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GIT_TOKEN"))
+            {
+                return git2::Cred::userpass_plaintext("git", &token);
+            }
+        }
+
+        // Strategy 3: SSH agent
+        if allowed_types.contains(git2::CredentialType::SSH_KEY) {
+            return git2::Cred::ssh_key_from_agent(username);
+        }
+
+        Err(git2::Error::from_str("No suitable credentials found"))
+    });
+    callbacks
+}
+
+/// Build `FetchOptions` with auth callbacks.
+fn build_fetch_options() -> git2::FetchOptions<'static> {
+    let mut opts = git2::FetchOptions::new();
+    opts.remote_callbacks(build_remote_callbacks());
+    opts
+}
+
+/// Build `PushOptions` with auth callbacks.
+fn build_push_options() -> git2::PushOptions<'static> {
+    let mut opts = git2::PushOptions::new();
+    opts.remote_callbacks(build_remote_callbacks());
+    opts
+}
+
+/// Wrap auth errors with actionable guidance.
+fn wrap_auth_error(e: git2::Error, remote_name: &str) -> TallyError {
+    if e.code() == git2::ErrorCode::Auth
+        || e.message().contains("authentication")
+        || e.message().contains("credential")
+    {
+        TallyError::Git(git2::Error::from_str(&format!(
+            "Authentication failed for remote '{remote_name}'. Configure credentials with one of:\n  \
+             - gh auth setup-git\n  \
+             - git config --global credential.helper osxkeychain\n  \
+             - Set GITHUB_TOKEN environment variable"
+        )))
+    } else {
+        TallyError::Git(e)
+    }
+}
+
 /// Result of a sync operation.
 #[derive(Debug)]
 pub struct SyncResult {
@@ -307,7 +383,10 @@ impl GitFindingsStore {
 
         // Fetch the remote branch
         let mut remote = self.repo.find_remote(remote_name)?;
-        remote.fetch(&[&self.branch_name], None, None)?;
+        let mut fetch_opts = build_fetch_options();
+        remote
+            .fetch(&[&self.branch_name], Some(&mut fetch_opts), None)
+            .map_err(|e| wrap_auth_error(e, remote_name))?;
 
         // Check if remote branch exists
         let remote_commit = match self.repo.find_reference(&remote_ref) {
@@ -390,7 +469,8 @@ impl GitFindingsStore {
         // Push with retry
         for attempt in 0..MAX_LOCK_RETRIES {
             let mut push_remote = self.repo.find_remote(remote_name)?;
-            match push_remote.push(&[&format!("{ref_name}:{ref_name}")], None) {
+            let mut push_opts = build_push_options();
+            match push_remote.push(&[&format!("{ref_name}:{ref_name}")], Some(&mut push_opts)) {
                 Ok(()) => {
                     return Ok(SyncResult {
                         fetched: remote_commit.is_some(),
@@ -411,9 +491,10 @@ impl GitFindingsStore {
 
                     // Re-fetch and try to merge again before retry
                     let mut fetch_remote = self.repo.find_remote(remote_name)?;
-                    fetch_remote.fetch(&[&self.branch_name], None, None)?;
+                    let mut retry_fetch_opts = build_fetch_options();
+                    fetch_remote.fetch(&[&self.branch_name], Some(&mut retry_fetch_opts), None)?;
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(wrap_auth_error(e, remote_name)),
             }
         }
 

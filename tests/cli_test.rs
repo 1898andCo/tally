@@ -93,7 +93,8 @@ fn cli_init_succeeds() {
         .current_dir(tmp.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("Initialized"));
+        .stderr(predicate::str::contains("Initialized"))
+        .stderr(predicate::str::contains("protect the findings-data branch"));
 }
 
 #[test]
