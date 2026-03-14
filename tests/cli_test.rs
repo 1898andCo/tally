@@ -46,6 +46,35 @@ fn cli_help_shows_subcommands() {
 }
 
 #[test]
+fn cli_mcp_capabilities_lists_all() {
+    // No repo needed — capabilities are reflected from the server struct
+    tally()
+        .arg("mcp-capabilities")
+        .assert()
+        .success()
+        // Tools — dynamically reflected
+        .stdout(predicate::str::contains("Tools (6)"))
+        .stdout(predicate::str::contains("record_finding"))
+        .stdout(predicate::str::contains("query_findings"))
+        .stdout(predicate::str::contains("update_finding_status"))
+        .stdout(predicate::str::contains("suppress_finding"))
+        .stdout(predicate::str::contains("record_batch"))
+        .stdout(predicate::str::contains("get_finding_context"))
+        // Prompts — dynamically reflected
+        .stdout(predicate::str::contains("Prompts (5)"))
+        .stdout(predicate::str::contains("triage-file"))
+        .stdout(predicate::str::contains("fix-finding"))
+        .stdout(predicate::str::contains("summarize-findings"))
+        .stdout(predicate::str::contains("review-pr"))
+        .stdout(predicate::str::contains("explain-finding"))
+        // Resources
+        .stdout(predicate::str::contains("Resources (6)"))
+        .stdout(predicate::str::contains("findings://summary"))
+        // Config example
+        .stdout(predicate::str::contains("mcp-server"));
+}
+
+#[test]
 fn cli_init_succeeds() {
     let tmp = setup_cli_repo();
     tally()
