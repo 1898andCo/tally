@@ -12,7 +12,7 @@ async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 comfy-table = "7"
-git2 = "0.19"
+git2 = "0.20"
 hex = "0.4"
 rmcp = { version = "0.8", features = ["server", "transport-io", "macros"] }
 schemars = "0.8"
