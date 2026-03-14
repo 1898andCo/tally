@@ -197,6 +197,8 @@ fn create_finding(
         commit_sha,
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     };
 
     store.save_finding(&finding)?;

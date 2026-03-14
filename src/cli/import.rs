@@ -159,6 +159,8 @@ fn import_single_finding(entry: &serde_json::Value, store: &GitFindingsStore) ->
         commit_sha: None,
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     };
 
     store.save_finding(&finding)?;

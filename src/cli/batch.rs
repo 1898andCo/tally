@@ -148,6 +148,8 @@ fn process_batch_line(
                 commit_sha: None,
                 relationships: vec![],
                 suppression: None,
+                notes: vec![],
+                edit_history: vec![],
             };
             store.save_finding(&finding)?;
             Ok(serde_json::json!({"status": "created", "uuid": new_uuid.to_string()}))

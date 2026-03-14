@@ -68,6 +68,8 @@ fn make_test_finding(uuid: Uuid) -> Finding {
         commit_sha: None,
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     }
 }
 

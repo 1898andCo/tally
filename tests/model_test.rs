@@ -315,6 +315,8 @@ fn finding_serialization_roundtrip() {
         commit_sha: None,
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     };
 
     let json = serde_json::to_string_pretty(&finding).expect("serialize");
@@ -379,6 +381,8 @@ fn finding_with_empty_locations() {
         commit_sha: None,
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     };
 
     let json = serde_json::to_string_pretty(&finding).expect("serialize");
@@ -455,6 +459,8 @@ fn finding_with_all_fields_populated() {
                 pattern: "tally:suppress sql-injection".to_string(),
             },
         }),
+        notes: vec![],
+        edit_history: vec![],
     };
 
     let json = serde_json::to_string_pretty(&finding).expect("serialize");
@@ -858,5 +864,327 @@ fn severity_display_roundtrip_all() {
             panic!("Display→FromStr roundtrip failed for {sev}: {e}");
         });
         assert_eq!(sev, parsed, "roundtrip failed for {sev}");
+    }
+}
+
+// =============================================================================
+// Phase 1: Notes & Edit History (v0.5.0)
+// =============================================================================
+
+/// Helper to create a minimal finding for edit/note tests.
+fn make_test_finding() -> Finding {
+    Finding {
+        schema_version: "1.0.0".to_string(),
+        uuid: uuid::Uuid::now_v7(),
+        content_fingerprint: "sha256:test".to_string(),
+        rule_id: "spec-drift".to_string(),
+        locations: vec![Location {
+            file_path: "src/main.rs".to_string(),
+            line_start: 42,
+            line_end: 42,
+            role: LocationRole::Primary,
+            message: None,
+        }],
+        severity: Severity::Important,
+        category: String::new(),
+        tags: vec![],
+        title: "unwrap on Option".to_string(),
+        description: "Line 42 calls .unwrap() on an Option.".to_string(),
+        suggested_fix: Some("Use ? or expect()".to_string()),
+        evidence: None,
+        status: LifecycleState::Open,
+        state_history: vec![],
+        discovered_by: vec![AgentRecord {
+            agent_id: "test".to_string(),
+            session_id: String::new(),
+            detected_at: chrono::Utc::now(),
+            session_short_id: None,
+        }],
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        repo_id: String::new(),
+        branch: None,
+        pr_number: None,
+        commit_sha: None,
+        relationships: vec![],
+        suppression: None,
+        notes: vec![],
+        edit_history: vec![],
+    }
+}
+
+#[test]
+fn v040_finding_deserializes_without_notes_or_edit_history() {
+    let json = r#"{
+      "schema_version": "1.0.0",
+      "uuid": "019cebd0-5c2a-7b73-8fb9-bdc551dce811",
+      "content_fingerprint": "sha256:e7f50c20ae2afdc066f9839ff3b481429bcac80b85a5308f7f3e74d6fa906488",
+      "rule_id": "spec-drift",
+      "locations": [{"file_path": "src/main.rs", "line_start": 42, "line_end": 42, "role": "primary"}],
+      "severity": "important",
+      "category": "",
+      "title": "unwrap on Option",
+      "description": "Line 42 calls .unwrap() on an Option.",
+      "suggested_fix": "Use ? or expect()",
+      "evidence": null,
+      "status": "open",
+      "state_history": [],
+      "discovered_by": [{"agent_id": "test", "session_id": "", "detected_at": "2026-03-14T10:00:00Z"}],
+      "created_at": "2026-03-14T10:00:00Z",
+      "updated_at": "2026-03-14T10:00:00Z",
+      "repo_id": ""
+    }"#;
+
+    let finding: Finding = serde_json::from_str(json).expect("deserialize v0.4.0 finding");
+    assert!(finding.notes.is_empty(), "notes should default to empty");
+    assert!(
+        finding.edit_history.is_empty(),
+        "edit_history should default to empty"
+    );
+    assert_eq!(finding.title, "unwrap on Option");
+    assert_eq!(finding.severity, Severity::Important);
+    assert_eq!(finding.status, LifecycleState::Open);
+}
+
+#[test]
+fn finding_with_notes_serializes_correctly() {
+    let mut finding = make_test_finding();
+    finding.add_note("Covered by Story 1.21 AC-2", "dclaude:check-drift");
+
+    let json = serde_json::to_string_pretty(&finding).expect("serialize");
+    assert!(json.contains("\"notes\""), "JSON should contain notes");
+    assert!(
+        json.contains("Covered by Story 1.21 AC-2"),
+        "note text in JSON"
+    );
+}
+
+#[test]
+fn finding_with_empty_notes_omits_from_json() {
+    let finding = make_test_finding();
+    let json = serde_json::to_string_pretty(&finding).expect("serialize");
+    assert!(
+        !json.contains("\"notes\""),
+        "empty notes should be omitted from JSON"
+    );
+    assert!(
+        !json.contains("\"edit_history\""),
+        "empty edit_history should be omitted from JSON"
+    );
+}
+
+#[test]
+fn edit_field_captures_old_and_new_value() {
+    let mut finding = make_test_finding();
+    finding
+        .edit_field(
+            "suggested_fix",
+            serde_json::Value::String("Support both =~ and MATCHES".to_string()),
+            "dclaude:check-drift",
+        )
+        .expect("edit");
+
+    assert_eq!(finding.edit_history.len(), 1);
+    let edit = &finding.edit_history[0];
+    assert_eq!(edit.field, "suggested_fix");
+    assert_eq!(edit.old_value, serde_json::json!("Use ? or expect()"));
+    assert_eq!(
+        edit.new_value,
+        serde_json::json!("Support both =~ and MATCHES")
+    );
+    assert_eq!(edit.agent_id, "dclaude:check-drift");
+}
+
+#[test]
+fn edit_field_title_updates_correctly() {
+    let mut finding = make_test_finding();
+    finding
+        .edit_field("title", serde_json::json!("new title"), "test")
+        .expect("edit");
+    assert_eq!(finding.title, "new title");
+}
+
+#[test]
+fn edit_field_description_updates_correctly() {
+    let mut finding = make_test_finding();
+    finding
+        .edit_field(
+            "description",
+            serde_json::json!("updated description"),
+            "test",
+        )
+        .expect("edit");
+    assert_eq!(finding.description, "updated description");
+}
+
+#[test]
+fn edit_field_suggested_fix_updates_correctly() {
+    let mut finding = make_test_finding();
+    finding
+        .edit_field("suggested_fix", serde_json::json!("new fix"), "test")
+        .expect("edit");
+    assert_eq!(finding.suggested_fix.as_deref(), Some("new fix"));
+}
+
+#[test]
+fn edit_field_evidence_updates_correctly() {
+    let mut finding = make_test_finding();
+    finding
+        .edit_field("evidence", serde_json::json!("new evidence"), "test")
+        .expect("edit");
+    assert_eq!(finding.evidence.as_deref(), Some("new evidence"));
+}
+
+#[test]
+fn edit_field_severity_updates_correctly() {
+    let mut finding = make_test_finding();
+    assert_eq!(finding.severity, Severity::Important);
+    finding
+        .edit_field("severity", serde_json::json!("critical"), "test")
+        .expect("edit");
+    assert_eq!(finding.severity, Severity::Critical);
+}
+
+#[test]
+fn edit_field_category_updates_correctly() {
+    let mut finding = make_test_finding();
+    finding
+        .edit_field("category", serde_json::json!("security"), "test")
+        .expect("edit");
+    assert_eq!(finding.category, "security");
+}
+
+#[test]
+fn edit_field_tags_replaces_array() {
+    let mut finding = make_test_finding();
+    finding.tags = vec!["old-tag".to_string()];
+    finding
+        .edit_field("tags", serde_json::json!(["new-tag", "another"]), "test")
+        .expect("edit");
+    assert_eq!(finding.tags, vec!["new-tag", "another"]);
+}
+
+#[test]
+fn add_note_appends_without_status_change() {
+    let mut finding = make_test_finding();
+    let original_status = finding.status;
+    finding.add_note("some context", "cli");
+    assert_eq!(finding.notes.len(), 1);
+    assert_eq!(finding.notes[0].text, "some context");
+    assert_eq!(finding.status, original_status);
+}
+
+#[test]
+fn multiple_edits_grow_history_sequentially() {
+    let mut finding = make_test_finding();
+    finding
+        .edit_field("title", serde_json::json!("v2"), "agent1")
+        .expect("edit 1");
+    finding
+        .edit_field("title", serde_json::json!("v3"), "agent2")
+        .expect("edit 2");
+    finding
+        .edit_field("description", serde_json::json!("new desc"), "agent3")
+        .expect("edit 3");
+
+    assert_eq!(finding.edit_history.len(), 3);
+    assert_eq!(finding.edit_history[0].new_value, serde_json::json!("v2"));
+    assert_eq!(finding.edit_history[1].old_value, serde_json::json!("v2"));
+    assert_eq!(finding.edit_history[1].new_value, serde_json::json!("v3"));
+    assert_eq!(finding.edit_history[2].field, "description");
+}
+
+#[test]
+fn multiple_notes_grow_sequentially() {
+    let mut finding = make_test_finding();
+    finding.add_note("first", "agent1");
+    finding.add_note("second", "agent2");
+    assert_eq!(finding.notes.len(), 2);
+    assert_eq!(finding.notes[0].text, "first");
+    assert_eq!(finding.notes[1].text, "second");
+}
+
+#[test]
+fn edit_field_updates_updated_at_timestamp() {
+    let mut finding = make_test_finding();
+    let before = finding.updated_at;
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    finding
+        .edit_field("title", serde_json::json!("new"), "test")
+        .expect("edit");
+    assert!(finding.updated_at > before);
+}
+
+// --- Negative tests ---
+
+#[test]
+fn edit_field_rejects_immutable_field_uuid() {
+    let mut finding = make_test_finding();
+    let result = finding.edit_field("uuid", serde_json::json!("new-uuid"), "test");
+    assert!(result.is_err());
+}
+
+#[test]
+fn edit_field_rejects_immutable_field_fingerprint() {
+    let mut finding = make_test_finding();
+    let result = finding.edit_field("content_fingerprint", serde_json::json!("new"), "test");
+    assert!(result.is_err());
+}
+
+#[test]
+fn edit_field_rejects_immutable_field_rule_id() {
+    let mut finding = make_test_finding();
+    let result = finding.edit_field("rule_id", serde_json::json!("new"), "test");
+    assert!(result.is_err());
+}
+
+#[test]
+fn edit_field_rejects_immutable_field_status() {
+    let mut finding = make_test_finding();
+    let result = finding.edit_field("status", serde_json::json!("closed"), "test");
+    assert!(result.is_err());
+}
+
+#[test]
+fn edit_field_rejects_immutable_field_created_at() {
+    let mut finding = make_test_finding();
+    let result = finding.edit_field("created_at", serde_json::json!("2026-01-01"), "test");
+    assert!(result.is_err());
+}
+
+#[test]
+fn edit_field_rejects_unknown_field() {
+    let mut finding = make_test_finding();
+    let result = finding.edit_field("nonexistent_field", serde_json::json!("x"), "test");
+    assert!(result.is_err());
+}
+
+#[test]
+fn edit_field_severity_rejects_invalid_value() {
+    let mut finding = make_test_finding();
+    let result = finding.edit_field("severity", serde_json::json!("ultra"), "test");
+    assert!(result.is_err());
+}
+
+#[test]
+fn edit_field_error_lists_editable_fields() {
+    let mut finding = make_test_finding();
+    let err = finding
+        .edit_field("uuid", serde_json::json!("x"), "test")
+        .expect_err("uuid should be immutable");
+    let msg = err.to_string();
+    for field in &[
+        "title",
+        "description",
+        "suggested_fix",
+        "evidence",
+        "severity",
+        "category",
+        "tags",
+    ] {
+        assert!(
+            msg.contains(field),
+            "error should list '{field}' as editable, got: {msg}"
+        );
     }
 }

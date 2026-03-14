@@ -145,6 +145,8 @@ fn make_finding(uuid: Uuid, file: &str, line: u32, rule: &str) -> Finding {
         commit_sha: None,
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     }
 }
 
@@ -501,6 +503,8 @@ fn resolver_secondary_location_not_indexed() {
         commit_sha: None,
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     };
 
     let resolver = FindingIdentityResolver::from_findings(&[finding]);

@@ -98,6 +98,15 @@ pub struct Finding {
     // --- Suppression ---
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suppression: Option<Suppression>,
+
+    // --- Notes & Edit History (v0.5.0) ---
+    /// Timestamped notes (append-only). Added in v0.5.0.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
+
+    /// Field edit audit trail (append-only). Added in v0.5.0.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edit_history: Vec<FieldEdit>,
 }
 
 /// A code location — file path + line range + role.
@@ -266,6 +275,28 @@ impl std::str::FromStr for RelationshipType {
     }
 }
 
+/// A timestamped note attached to a finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Note {
+    pub text: String,
+    #[serde(default = "default_datetime")]
+    pub timestamp: DateTime<Utc>,
+    #[serde(default)]
+    pub agent_id: String,
+}
+
+/// A record of a field edit for audit trail.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldEdit {
+    pub field: String,
+    pub old_value: serde_json::Value,
+    pub new_value: serde_json::Value,
+    #[serde(default = "default_datetime")]
+    pub timestamp: DateTime<Utc>,
+    #[serde(default)]
+    pub agent_id: String,
+}
+
 /// Suppression metadata for findings that should not be re-reported.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Suppression {
@@ -287,4 +318,147 @@ pub enum SuppressionType {
     FileLevel,
     /// Inline comment suppression (e.g., `// tally:suppress unsafe-unwrap`).
     InlineComment { pattern: String },
+}
+
+/// Editable fields on a finding. Identity and provenance fields are immutable.
+const EDITABLE_FIELDS: &[&str] = &[
+    "title",
+    "description",
+    "suggested_fix",
+    "evidence",
+    "severity",
+    "category",
+    "tags",
+];
+
+impl Finding {
+    /// Edit a mutable field on this finding, recording the change in `edit_history`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidInput` if `field` is not in the editable set, or if the
+    /// new value is invalid for the field type (e.g., invalid severity string).
+    #[allow(clippy::too_many_lines)] // dispatch across 7 field types in one match
+    pub fn edit_field(
+        &mut self,
+        field: &str,
+        new_value: serde_json::Value,
+        agent_id: &str,
+    ) -> crate::error::Result<()> {
+        if !EDITABLE_FIELDS.contains(&field) {
+            return Err(crate::error::TallyError::InvalidInput(format!(
+                "field '{field}' is not editable (editable: {})",
+                EDITABLE_FIELDS.join(", ")
+            )));
+        }
+
+        let old_value: serde_json::Value;
+
+        match field {
+            "title" => {
+                let val = new_value
+                    .as_str()
+                    .ok_or_else(|| {
+                        crate::error::TallyError::InvalidInput("title must be a string".to_string())
+                    })?
+                    .to_string();
+                old_value = serde_json::Value::String(self.title.clone());
+                self.title = val;
+            }
+            "description" => {
+                let val = new_value
+                    .as_str()
+                    .ok_or_else(|| {
+                        crate::error::TallyError::InvalidInput(
+                            "description must be a string".to_string(),
+                        )
+                    })?
+                    .to_string();
+                old_value = serde_json::Value::String(self.description.clone());
+                self.description = val;
+            }
+            "suggested_fix" => {
+                let val = new_value.as_str().map(String::from);
+                old_value = self
+                    .suggested_fix
+                    .as_ref()
+                    .map_or(serde_json::Value::Null, |s| {
+                        serde_json::Value::String(s.clone())
+                    });
+                self.suggested_fix = val;
+            }
+            "evidence" => {
+                let val = new_value.as_str().map(String::from);
+                old_value = self.evidence.as_ref().map_or(serde_json::Value::Null, |s| {
+                    serde_json::Value::String(s.clone())
+                });
+                self.evidence = val;
+            }
+            "severity" => {
+                let s = new_value.as_str().ok_or_else(|| {
+                    crate::error::TallyError::InvalidInput("severity must be a string".to_string())
+                })?;
+                let new_sev: Severity = s
+                    .parse()
+                    .map_err(|e: String| crate::error::TallyError::InvalidInput(e))?;
+                old_value = serde_json::to_value(self.severity).unwrap_or(serde_json::Value::Null);
+                self.severity = new_sev;
+            }
+            "category" => {
+                let val = new_value
+                    .as_str()
+                    .ok_or_else(|| {
+                        crate::error::TallyError::InvalidInput(
+                            "category must be a string".to_string(),
+                        )
+                    })?
+                    .to_string();
+                old_value = serde_json::Value::String(self.category.clone());
+                self.category = val;
+            }
+            "tags" => {
+                old_value = serde_json::to_value(&self.tags).unwrap_or(serde_json::Value::Null);
+                // Accept either a single string or an array of strings — replace entirely
+                if let Some(arr) = new_value.as_array() {
+                    self.tags = arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                } else if let Some(s) = new_value.as_str() {
+                    self.tags = s
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|t| !t.is_empty())
+                        .map(String::from)
+                        .collect();
+                } else {
+                    return Err(crate::error::TallyError::InvalidInput(
+                        "tags must be a string or array of strings".to_string(),
+                    ));
+                }
+            }
+            _ => unreachable!("field validated against EDITABLE_FIELDS"),
+        }
+
+        self.edit_history.push(FieldEdit {
+            field: field.to_string(),
+            old_value,
+            new_value,
+            timestamp: Utc::now(),
+            agent_id: agent_id.to_string(),
+        });
+        self.updated_at = Utc::now();
+
+        Ok(())
+    }
+
+    /// Append a note to this finding without changing its status.
+    pub fn add_note(&mut self, text: &str, agent_id: &str) {
+        self.notes.push(Note {
+            text: text.to_string(),
+            timestamp: Utc::now(),
+            agent_id: agent_id.to_string(),
+        });
+        self.updated_at = Utc::now();
+    }
 }

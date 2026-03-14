@@ -991,6 +991,8 @@ fn import_finding_from_json(
         commit_sha: None,
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     };
 
     store.save_finding(&finding).map_err(to_mcp_err)?;
@@ -1446,6 +1448,8 @@ fn record_batch_entry(
                 commit_sha: None,
                 relationships: vec![],
                 suppression: None,
+                notes: vec![],
+                edit_history: vec![],
             };
             store.save_finding(&finding).map_err(|e| e.to_string())?;
             Ok(serde_json::json!({"status": "created", "uuid": new_uuid.to_string()}))
@@ -1491,6 +1495,8 @@ fn build_finding(
         commit_sha: ctx.commit_sha.clone(),
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     }
 }
 
