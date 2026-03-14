@@ -20,6 +20,7 @@ use super::OutputFormat;
 /// # Errors
 ///
 /// Returns error if branch creation fails.
+#[tracing::instrument(skip_all)]
 pub fn handle_init(store: &GitFindingsStore) -> Result<()> {
     store.init()?;
     tracing::info!("Initialized findings-data branch");
@@ -51,6 +52,7 @@ pub struct RecordArgs<'a> {
 /// # Errors
 ///
 /// Returns error if severity is invalid, storage fails, or branch doesn't exist.
+#[tracing::instrument(skip_all, fields(file = args.file, rule = args.rule, severity = args.severity))]
 pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<()> {
     let severity: Severity = args
         .severity
@@ -116,6 +118,7 @@ pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<
 /// # Errors
 ///
 /// Returns error if storage fails or branch doesn't exist.
+#[tracing::instrument(skip_all, fields(format = ?format))]
 #[allow(clippy::too_many_arguments)]
 pub fn handle_query(
     store: &GitFindingsStore,
@@ -191,6 +194,7 @@ pub struct UpdateArgs<'a> {
 /// # Errors
 ///
 /// Returns error if finding not found, transition invalid, or storage fails.
+#[tracing::instrument(skip_all, fields(id = args.id, status = args.status))]
 pub fn handle_update(store: &GitFindingsStore, args: &UpdateArgs<'_>) -> Result<()> {
     let uuid = resolve_finding_id(store, args.id)?;
     let new_status: LifecycleState = args
@@ -239,6 +243,7 @@ pub fn handle_update(store: &GitFindingsStore, args: &UpdateArgs<'_>) -> Result<
 /// # Errors
 ///
 /// Returns error if storage fails.
+#[tracing::instrument(skip_all)]
 pub fn handle_rebuild_index(store: &GitFindingsStore) -> Result<()> {
     store.rebuild_index()?;
     tracing::info!("Index rebuilt");
@@ -250,6 +255,7 @@ pub fn handle_rebuild_index(store: &GitFindingsStore) -> Result<()> {
 /// # Errors
 ///
 /// Returns error if finding not found, transition invalid, or storage fails.
+#[tracing::instrument(skip_all, fields(id = id_str))]
 pub fn handle_suppress(
     store: &GitFindingsStore,
     id_str: &str,
@@ -312,6 +318,7 @@ pub fn handle_suppress(
 /// # Errors
 ///
 /// Returns error if storage fails.
+#[tracing::instrument(skip_all)]
 pub fn handle_stats(store: &GitFindingsStore) -> Result<()> {
     let findings = store.load_all()?;
 
@@ -415,6 +422,7 @@ pub fn handle_mcp_capabilities() {
 ///
 /// Returns error if storage fails. Individual finding errors are reported
 /// per-item (partial success).
+#[tracing::instrument(skip_all, fields(input = input_path))]
 pub fn handle_record_batch(store: &GitFindingsStore, input_path: &str, agent: &str) -> Result<()> {
     use std::io::{self, BufRead};
 
@@ -472,6 +480,7 @@ pub fn handle_record_batch(store: &GitFindingsStore, input_path: &str, agent: &s
 /// # Errors
 ///
 /// Returns error if storage or serialization fails.
+#[tracing::instrument(skip_all, fields(format = ?format))]
 pub fn handle_export(
     store: &GitFindingsStore,
     format: super::ExportFormat,
@@ -503,6 +512,7 @@ pub fn handle_export(
 /// # Errors
 ///
 /// Returns error if remote operations fail.
+#[tracing::instrument(skip_all, fields(remote = remote))]
 pub fn handle_sync(store: &GitFindingsStore, remote: &str) -> Result<()> {
     let result = store.sync(remote)?;
     tracing::info!(
@@ -519,6 +529,7 @@ pub fn handle_sync(store: &GitFindingsStore, remote: &str) -> Result<()> {
 /// # Errors
 ///
 /// Returns error if the file cannot be read or parsed.
+#[tracing::instrument(skip_all, fields(path = path))]
 pub fn handle_import(store: &GitFindingsStore, path: &str) -> Result<()> {
     let content = std::fs::read_to_string(path).map_err(TallyError::Io)?;
     let state: serde_json::Value =

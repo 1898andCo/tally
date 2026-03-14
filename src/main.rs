@@ -7,10 +7,31 @@ use tally::cli::handlers;
 use tally::cli::{Cli, Command};
 use tally::storage::GitFindingsStore;
 
-fn init_tracing() {
+fn init_tracing(verbose: u8, quiet: u8) {
     use tracing_subscriber::EnvFilter;
 
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    // RUST_LOG takes precedence if set
+    let filter = if let Ok(env_filter) = EnvFilter::try_from_default_env() {
+        env_filter
+    } else {
+        // Default: warn
+        // -q: error, -qq: off
+        // -v: info, -vv: debug, -vvv: trace
+        let level = if quiet > 0 {
+            match quiet {
+                1 => "error",
+                _ => "off",
+            }
+        } else {
+            match verbose {
+                0 => "warn",
+                1 => "info",
+                2 => "debug",
+                _ => "trace",
+            }
+        };
+        EnvFilter::new(level)
+    };
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -23,7 +44,7 @@ fn init_tracing() {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    init_tracing();
+    init_tracing(cli.verbose, cli.quiet);
 
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
