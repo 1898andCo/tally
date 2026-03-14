@@ -3,8 +3,7 @@
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser};
-use tally_ng::cli::handlers;
-use tally_ng::cli::{Cli, Command};
+use tally_ng::cli::{self, Cli, Command};
 use tally_ng::storage::GitFindingsStore;
 
 fn init_tracing(verbose: u8, quiet: u8) {
@@ -66,7 +65,7 @@ fn store() -> tally_ng::error::Result<GitFindingsStore> {
 #[allow(clippy::too_many_lines)] // dispatch function maps 1:1 with CLI subcommands
 fn run(cli: Cli) -> tally_ng::error::Result<()> {
     match cli.command {
-        Command::Init => handlers::handle_init(&store()?),
+        Command::Init => cli::handle_init(&store()?),
         Command::Record {
             file,
             line,
@@ -84,9 +83,9 @@ fn run(cli: Cli) -> tally_ng::error::Result<()> {
             category,
             suggested_fix,
             evidence,
-        } => handlers::handle_record(
+        } => cli::handle_record(
             &store()?,
-            &handlers::RecordArgs {
+            &cli::RecordArgs {
                 file: &file,
                 line,
                 line_end,
@@ -111,15 +110,17 @@ fn run(cli: Cli) -> tally_ng::error::Result<()> {
             file,
             rule,
             related_to,
+            tag,
             format,
             limit,
-        } => handlers::handle_query(
+        } => cli::handle_query(
             &store()?,
             status.as_deref(),
             severity.as_deref(),
             file.as_deref(),
             rule.as_deref(),
             related_to.as_deref(),
+            tag.as_deref(),
             format,
             limit,
         ),
@@ -131,9 +132,9 @@ fn run(cli: Cli) -> tally_ng::error::Result<()> {
             agent,
             related_to,
             relationship,
-        } => handlers::handle_update(
+        } => cli::handle_update(
             &store()?,
-            &handlers::UpdateArgs {
+            &cli::UpdateArgs {
                 id: &id,
                 status: &status,
                 reason: reason.as_deref(),
@@ -150,7 +151,7 @@ fn run(cli: Cli) -> tally_ng::error::Result<()> {
             agent,
             suppression_type,
             suppression_pattern,
-        } => handlers::handle_suppress(
+        } => cli::handle_suppress(
             &store()?,
             &id,
             &reason,
@@ -159,16 +160,16 @@ fn run(cli: Cli) -> tally_ng::error::Result<()> {
             &suppression_type,
             suppression_pattern.as_deref(),
         ),
-        Command::RebuildIndex => handlers::handle_rebuild_index(&store()?),
+        Command::RebuildIndex => cli::handle_rebuild_index(&store()?),
         Command::RecordBatch { input, agent } => {
-            handlers::handle_record_batch(&store()?, &input, &agent)
+            cli::handle_record_batch(&store()?, &input, &agent)
         }
         Command::Export { format, output } => {
-            handlers::handle_export(&store()?, format, output.as_deref())
+            cli::handle_export(&store()?, format, output.as_deref())
         }
-        Command::Sync { remote } => handlers::handle_sync(&store()?, &remote),
-        Command::Import { path } => handlers::handle_import(&store()?, &path),
-        Command::Stats => handlers::handle_stats(&store()?),
+        Command::Sync { remote } => cli::handle_sync(&store()?, &remote),
+        Command::Import { path } => cli::handle_import(&store()?, &path),
+        Command::Stats => cli::handle_stats(&store()?),
         Command::McpServer => {
             let rt = tokio::runtime::Runtime::new().map_err(tally_ng::error::TallyError::Io)?;
             rt.block_on(tally_ng::mcp::server::run_mcp_server("."))
@@ -178,8 +179,39 @@ fn run(cli: Cli) -> tally_ng::error::Result<()> {
             clap_complete::generate(shell, &mut Cli::command(), "tally", &mut std::io::stdout());
             Ok(())
         }
+        Command::UpdateFields {
+            id,
+            title,
+            description,
+            suggested_fix,
+            evidence,
+            severity,
+            category,
+            tags,
+            agent,
+            format,
+        } => cli::handle_update_fields(
+            &store()?,
+            &id,
+            title.as_deref(),
+            description.as_deref(),
+            suggested_fix.as_deref(),
+            evidence.as_deref(),
+            severity.as_deref(),
+            category.as_deref(),
+            tags.as_deref(),
+            &agent,
+            format,
+        ),
+        Command::AddNote { id, text, agent } => cli::handle_add_note(&store()?, &id, &text, &agent),
+        Command::ManageTags {
+            id,
+            add,
+            remove,
+            agent,
+        } => cli::handle_manage_tags(&store()?, &id, &add, &remove, &agent),
         Command::McpCapabilities => {
-            handlers::handle_mcp_capabilities();
+            cli::handle_mcp_capabilities();
             Ok(())
         }
     }

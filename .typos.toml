@@ -4,4 +4,4 @@ rmcp = "rmcp"
 sarif = "sarif"
 
 [files]
-extend-exclude = [".claude/", "target/"]
+extend-exclude = [".claude/", "target/", "_bmad/", "_bmad-output/"]

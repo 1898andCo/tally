@@ -68,6 +68,8 @@ fn make_test_finding(uuid: Uuid) -> Finding {
         commit_sha: None,
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     }
 }
 
@@ -641,7 +643,7 @@ fn init_first_call_creates_full_tree() {
     let schema_blob = repo.find_blob(schema_entry.id()).expect("schema blob");
     let schema: serde_json::Value =
         serde_json::from_slice(schema_blob.content()).expect("parse schema");
-    assert_eq!(schema["version"], "1.0.0");
+    assert_eq!(schema["version"], "1.1.0");
     assert_eq!(schema["format"], "one-file-per-finding");
     assert!(schema["created_at"].is_string(), "created_at must be set");
 

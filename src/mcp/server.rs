@@ -23,9 +23,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::model::{
-    AgentRecord, Finding, FindingIdentityResolver, IdentityResolution, LifecycleState, Location,
-    LocationRole, Severity, StateTransition, Suppression, SuppressionType, compute_fingerprint,
-    default_schema_version,
+    AgentRecord, FieldEdit, Finding, FindingIdentityResolver, IdentityResolution, LifecycleState,
+    Location, LocationRole, Severity, StateTransition, Suppression, SuppressionType,
+    compute_fingerprint, default_schema_version,
 };
 use crate::storage::GitFindingsStore;
 
@@ -133,6 +133,60 @@ pub struct QueryFindingsInput {
     pub rule: Option<String>,
     #[schemars(description = "Maximum number of results to return (default: 100)")]
     pub limit: Option<usize>,
+    #[schemars(
+        description = "Filter by tag (substring match against finding's tags array, e.g., 'story:1.21')"
+    )]
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateFindingInput {
+    #[schemars(
+        description = "Finding identifier — full UUID or session short ID (e.g., C1, I2, S3, TD1)"
+    )]
+    pub finding_id: String,
+    #[schemars(description = "New title for the finding")]
+    pub title: Option<String>,
+    #[schemars(description = "New description for the finding")]
+    pub description: Option<String>,
+    #[schemars(description = "New suggested fix or remediation steps")]
+    pub suggested_fix: Option<String>,
+    #[schemars(description = "New evidence or code snippet")]
+    pub evidence: Option<String>,
+    #[schemars(
+        description = "New severity level. One of: critical, important, suggestion, tech_debt"
+    )]
+    pub severity: Option<String>,
+    #[schemars(description = "New category for the finding")]
+    pub category: Option<String>,
+    #[schemars(description = "Replace tags with this array")]
+    pub tags: Option<Vec<String>>,
+    #[schemars(description = "Agent identifier performing the edit (default: mcp)")]
+    pub agent: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AddNoteInput {
+    #[schemars(
+        description = "Finding identifier — full UUID or session short ID (e.g., C1, I2, S3, TD1)"
+    )]
+    pub finding_id: String,
+    #[schemars(description = "Note text to append to the finding")]
+    pub note: String,
+    #[schemars(description = "Agent identifier (default: mcp)")]
+    pub agent: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TagInput {
+    #[schemars(
+        description = "Finding identifier — full UUID or session short ID (e.g., C1, I2, S3, TD1)"
+    )]
+    pub finding_id: String,
+    #[schemars(description = "Tags to add or remove")]
+    pub tags: Vec<String>,
+    #[schemars(description = "Agent identifier (default: mcp)")]
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -142,7 +196,7 @@ pub struct UpdateStatusInput {
     )]
     pub finding_id: String,
     #[schemars(
-        description = "Target lifecycle status. Complete state machine: Open→acknowledged/in_progress/false_positive/deferred/suppressed, Acknowledged→in_progress/false_positive/wont_fix/deferred, InProgress→resolved/wont_fix/deferred, Resolved→reopened/closed, FalsePositive→reopened/closed, WontFix→reopened/closed, Deferred→open/closed, Suppressed→open/closed, Reopened→acknowledged/in_progress, Closed→(terminal, no transitions). Invalid transitions return an error listing valid targets."
+        description = "Target lifecycle status. Complete state machine: Open→acknowledged/in_progress/false_positive/deferred/suppressed, Acknowledged→in_progress/false_positive/wont_fix/deferred, InProgress→resolved/wont_fix/deferred, Resolved→reopened/closed, FalsePositive→reopened/closed, WontFix→reopened/closed, Deferred→open/reopened/closed, Suppressed→open/reopened/closed, Reopened→acknowledged/in_progress, Closed→(terminal, no transitions). Invalid transitions return an error listing valid targets."
     )]
     pub new_status: String,
     #[schemars(
@@ -502,6 +556,9 @@ impl TallyMcpServer {
         if let Some(ref rule) = input.rule {
             findings.retain(|f| f.rule_id == *rule);
         }
+        if let Some(ref tag_filter) = input.tag {
+            findings.retain(|f| f.tags.iter().any(|t| t.contains(tag_filter.as_str())));
+        }
         findings.truncate(input.limit.unwrap_or(100));
 
         Ok(CallToolResult::success(vec![Content::text(
@@ -766,8 +823,8 @@ impl TallyMcpServer {
 
         let content = match input.format.to_ascii_lowercase().as_str() {
             "json" => serde_json::to_string_pretty(&findings).unwrap_or_default(),
-            "csv" => crate::cli::handlers::export_csv(&findings),
-            "sarif" => crate::cli::handlers::export_sarif(&findings),
+            "csv" => crate::cli::export_csv(&findings),
+            "sarif" => crate::cli::export_sarif(&findings),
             other => {
                 return Err(McpError {
                     code: ErrorCode::INVALID_REQUEST,
@@ -887,6 +944,196 @@ impl TallyMcpServer {
             .unwrap_or_default(),
         )]))
     }
+
+    #[tool(
+        description = "Edit mutable fields on an existing finding (title, description, suggested_fix, evidence, severity, category, tags). Records a FieldEdit entry in the finding's edit_history for audit trail. Identity and provenance fields (uuid, fingerprint, rule_id, status, created_at) cannot be edited — use update_finding_status for status changes. At least one field must be specified."
+    )]
+    pub async fn update_finding(
+        &self,
+        params: Parameters<UpdateFindingInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+        let uuid = resolve_id_mcp(&store, &input.finding_id)?;
+        let mut finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
+        let agent = input.agent.as_deref().unwrap_or("mcp");
+
+        let mut edits = 0u32;
+        if let Some(v) = input.title {
+            finding
+                .edit_field("title", serde_json::json!(v), agent)
+                .map_err(to_mcp_err)?;
+            edits += 1;
+        }
+        if let Some(v) = input.description {
+            finding
+                .edit_field("description", serde_json::json!(v), agent)
+                .map_err(to_mcp_err)?;
+            edits += 1;
+        }
+        if let Some(v) = input.suggested_fix {
+            finding
+                .edit_field("suggested_fix", serde_json::json!(v), agent)
+                .map_err(to_mcp_err)?;
+            edits += 1;
+        }
+        if let Some(v) = input.evidence {
+            finding
+                .edit_field("evidence", serde_json::json!(v), agent)
+                .map_err(to_mcp_err)?;
+            edits += 1;
+        }
+        if let Some(v) = input.severity {
+            finding
+                .edit_field("severity", serde_json::json!(v), agent)
+                .map_err(to_mcp_err)?;
+            edits += 1;
+        }
+        if let Some(v) = input.category {
+            finding
+                .edit_field("category", serde_json::json!(v), agent)
+                .map_err(to_mcp_err)?;
+            edits += 1;
+        }
+        if let Some(v) = input.tags {
+            finding
+                .edit_field("tags", serde_json::json!(v), agent)
+                .map_err(to_mcp_err)?;
+            edits += 1;
+        }
+
+        if edits == 0 {
+            return Err(McpError {
+                code: ErrorCode::INVALID_REQUEST,
+                message: "At least one field must be specified to update.".into(),
+                data: None,
+            });
+        }
+
+        store.save_finding(&finding).map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&finding).unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Append a timestamped note to a finding without changing its status. Notes are free-text annotations for context, decisions, or cross-references (e.g., 'Covered by Story 1.21 AC-2'). Notes are append-only and included in get_finding_context output."
+    )]
+    pub async fn add_note(
+        &self,
+        params: Parameters<AddNoteInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        if input.note.is_empty() {
+            return Err(McpError {
+                code: ErrorCode::INVALID_REQUEST,
+                message: "Note text cannot be empty.".into(),
+                data: None,
+            });
+        }
+        let store = self.store()?;
+        let uuid = resolve_id_mcp(&store, &input.finding_id)?;
+        let mut finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
+        let agent = input.agent.as_deref().unwrap_or("mcp");
+
+        finding.add_note(&input.note, agent);
+        store.save_finding(&finding).map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "uuid": uuid.to_string(),
+                "status": finding.status.to_string(),
+                "notes_count": finding.notes.len(),
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Add tags to a finding. Merges with existing tags (duplicates are ignored). Records a FieldEdit for audit trail."
+    )]
+    pub async fn add_tag(&self, params: Parameters<TagInput>) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        if input.tags.is_empty() {
+            return Err(McpError {
+                code: ErrorCode::INVALID_REQUEST,
+                message: "At least one tag must be specified.".into(),
+                data: None,
+            });
+        }
+        let store = self.store()?;
+        let uuid = resolve_id_mcp(&store, &input.finding_id)?;
+        let mut finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
+        let agent = input.agent.as_deref().unwrap_or("mcp");
+
+        let old_tags = finding.tags.clone();
+        for tag in &input.tags {
+            if !finding.tags.contains(tag) {
+                finding.tags.push(tag.clone());
+            }
+        }
+
+        finding.edit_history.push(FieldEdit {
+            field: "tags".to_string(),
+            old_value: serde_json::to_value(&old_tags).unwrap_or_default(),
+            new_value: serde_json::to_value(&finding.tags).unwrap_or_default(),
+            timestamp: Utc::now(),
+            agent_id: agent.to_string(),
+        });
+        finding.updated_at = Utc::now();
+        store.save_finding(&finding).map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "uuid": uuid.to_string(),
+                "tags": finding.tags,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Remove tags from a finding. Removes exact matches only; missing tags are silently ignored. Records a FieldEdit for audit trail."
+    )]
+    pub async fn remove_tag(
+        &self,
+        params: Parameters<TagInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        if input.tags.is_empty() {
+            return Err(McpError {
+                code: ErrorCode::INVALID_REQUEST,
+                message: "At least one tag must be specified.".into(),
+                data: None,
+            });
+        }
+        let store = self.store()?;
+        let uuid = resolve_id_mcp(&store, &input.finding_id)?;
+        let mut finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
+        let agent = input.agent.as_deref().unwrap_or("mcp");
+
+        let old_tags = finding.tags.clone();
+        finding.tags.retain(|t| !input.tags.contains(t));
+
+        finding.edit_history.push(FieldEdit {
+            field: "tags".to_string(),
+            old_value: serde_json::to_value(&old_tags).unwrap_or_default(),
+            new_value: serde_json::to_value(&finding.tags).unwrap_or_default(),
+            timestamp: Utc::now(),
+            agent_id: agent.to_string(),
+        });
+        finding.updated_at = Utc::now();
+        store.save_finding(&finding).map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "uuid": uuid.to_string(),
+                "tags": finding.tags,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
 }
 
 /// Import a single finding from dclaude/zclaude JSON format (MCP helper).
@@ -991,6 +1238,8 @@ fn import_finding_from_json(
         commit_sha: None,
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     };
 
     store.save_finding(&finding).map_err(to_mcp_err)?;
@@ -1446,6 +1695,8 @@ fn record_batch_entry(
                 commit_sha: None,
                 relationships: vec![],
                 suppression: None,
+                notes: vec![],
+                edit_history: vec![],
             };
             store.save_finding(&finding).map_err(|e| e.to_string())?;
             Ok(serde_json::json!({"status": "created", "uuid": new_uuid.to_string()}))
@@ -1491,6 +1742,8 @@ fn build_finding(
         commit_sha: ctx.commit_sha.clone(),
         relationships: vec![],
         suppression: None,
+        notes: vec![],
+        edit_history: vec![],
     }
 }
 

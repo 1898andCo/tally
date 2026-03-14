@@ -28,6 +28,114 @@ const FINDINGS_DIR: &str = "findings";
 /// Max retry attempts for ref lock contention.
 const MAX_LOCK_RETRIES: u32 = 3;
 
+/// Build `RemoteCallbacks` with a credential chain:
+/// 1. git credential helper (`~/.gitconfig` — osxkeychain/manager/store, `gh auth setup-git`)
+/// 2. `GITHUB_TOKEN` / `GIT_TOKEN` environment variable
+/// 3. SSH agent (Unix `ssh-agent`, Windows OpenSSH agent)
+/// 4. SSH key from default paths (`~/.ssh/id_ed25519`, `~/.ssh/id_rsa`)
+///
+/// Tracks attempt count to avoid libgit2's infinite retry loop.
+fn build_remote_callbacks() -> git2::RemoteCallbacks<'static> {
+    let attempts = std::cell::Cell::new(0u32);
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.credentials(move |url, username_from_url, allowed_types| {
+        let attempt = attempts.get();
+        if attempt >= 4 {
+            return Err(git2::Error::from_str(
+                "Authentication failed: exhausted all credential strategies",
+            ));
+        }
+        attempts.set(attempt + 1);
+
+        let username = username_from_url.unwrap_or("git");
+
+        // Strategy 1: git credential helper (works cross-platform:
+        // macOS osxkeychain, Windows GCM, Linux store/cache, gh auth setup-git)
+        if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
+            if let Ok(config) = git2::Config::open_default() {
+                if let Ok(cred) = git2::Cred::credential_helper(&config, url, username_from_url) {
+                    return Ok(cred);
+                }
+            }
+
+            // Strategy 2: environment variable (CI/Actions, headless)
+            if let Ok(token) = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GIT_TOKEN"))
+            {
+                return git2::Cred::userpass_plaintext("git", &token);
+            }
+        }
+
+        // Strategy 3: SSH agent (Unix ssh-agent, Windows OpenSSH agent via SSH_AUTH_SOCK)
+        if allowed_types.contains(git2::CredentialType::SSH_KEY) {
+            if let Ok(cred) = git2::Cred::ssh_key_from_agent(username) {
+                return Ok(cred);
+            }
+
+            // Strategy 4: SSH key from default file paths (no agent needed)
+            if let Some(home) = home::home_dir() {
+                let ssh_dir = home.join(".ssh");
+                for key_name in &["id_ed25519", "id_rsa", "id_ecdsa"] {
+                    let privkey = ssh_dir.join(key_name);
+                    if privkey.exists() {
+                        let pubkey = ssh_dir.join(format!("{key_name}.pub"));
+                        let pubkey_ref = if pubkey.exists() {
+                            Some(pubkey.as_path())
+                        } else {
+                            None
+                        };
+                        if let Ok(cred) = git2::Cred::ssh_key(username, pubkey_ref, &privkey, None)
+                        {
+                            return Ok(cred);
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(git2::Error::from_str("No suitable credentials found"))
+    });
+    callbacks
+}
+
+/// Build `FetchOptions` with auth callbacks.
+fn build_fetch_options() -> git2::FetchOptions<'static> {
+    let mut opts = git2::FetchOptions::new();
+    opts.remote_callbacks(build_remote_callbacks());
+    opts
+}
+
+/// Build `PushOptions` with auth callbacks.
+fn build_push_options() -> git2::PushOptions<'static> {
+    let mut opts = git2::PushOptions::new();
+    opts.remote_callbacks(build_remote_callbacks());
+    opts
+}
+
+/// Wrap auth errors with actionable, platform-specific guidance.
+fn wrap_auth_error(e: git2::Error, remote_name: &str) -> TallyError {
+    if e.code() == git2::ErrorCode::Auth
+        || e.message().contains("authentication")
+        || e.message().contains("credential")
+    {
+        let helper_hint = if cfg!(target_os = "macos") {
+            "git config --global credential.helper osxkeychain"
+        } else if cfg!(target_os = "windows") {
+            "git config --global credential.helper manager"
+        } else {
+            "git config --global credential.helper store"
+        };
+        TallyError::Git(git2::Error::from_str(&format!(
+            "Authentication failed for remote '{remote_name}'. Configure credentials with one of:\n  \
+             - gh auth setup-git  (recommended)\n  \
+             - {helper_hint}\n  \
+             - Set GITHUB_TOKEN environment variable\n  \
+             - Add SSH key to ~/.ssh/ (id_ed25519 or id_rsa)"
+        )))
+    } else {
+        TallyError::Git(e)
+    }
+}
+
 /// Result of a sync operation.
 #[derive(Debug)]
 pub struct SyncResult {
@@ -77,7 +185,7 @@ impl GitFindingsStore {
         }
 
         let schema_content = serde_json::json!({
-            "version": "1.0.0",
+            "version": "1.1.0",
             "format": "one-file-per-finding",
             "created_at": chrono::Utc::now().to_rfc3339(),
         });
@@ -226,6 +334,7 @@ impl GitFindingsStore {
                     "file_path": primary_file,
                     "fingerprint": f.content_fingerprint,
                     "title": f.title,
+                    "tags": f.tags,
                     "created_at": f.created_at.to_rfc3339(),
                     "updated_at": f.updated_at.to_rfc3339(),
                 })
@@ -282,6 +391,13 @@ impl GitFindingsStore {
             .is_ok()
     }
 
+    /// Check if any remote has a findings-data branch (i.e., findings have been pushed).
+    #[must_use]
+    pub fn has_remote_branch(&self) -> bool {
+        let remote_ref = format!("refs/remotes/origin/{}", self.branch_name);
+        self.repo.find_reference(&remote_ref).is_ok()
+    }
+
     /// Sync the findings branch with the remote (fetch + merge + push).
     ///
     /// Fetches the remote findings-data branch, fast-forward merges if possible,
@@ -306,7 +422,10 @@ impl GitFindingsStore {
 
         // Fetch the remote branch
         let mut remote = self.repo.find_remote(remote_name)?;
-        remote.fetch(&[&self.branch_name], None, None)?;
+        let mut fetch_opts = build_fetch_options();
+        remote
+            .fetch(&[&self.branch_name], Some(&mut fetch_opts), None)
+            .map_err(|e| wrap_auth_error(e, remote_name))?;
 
         // Check if remote branch exists
         let remote_commit = match self.repo.find_reference(&remote_ref) {
@@ -389,7 +508,8 @@ impl GitFindingsStore {
         // Push with retry
         for attempt in 0..MAX_LOCK_RETRIES {
             let mut push_remote = self.repo.find_remote(remote_name)?;
-            match push_remote.push(&[&format!("{ref_name}:{ref_name}")], None) {
+            let mut push_opts = build_push_options();
+            match push_remote.push(&[&format!("{ref_name}:{ref_name}")], Some(&mut push_opts)) {
                 Ok(()) => {
                     return Ok(SyncResult {
                         fetched: remote_commit.is_some(),
@@ -410,9 +530,10 @@ impl GitFindingsStore {
 
                     // Re-fetch and try to merge again before retry
                     let mut fetch_remote = self.repo.find_remote(remote_name)?;
-                    fetch_remote.fetch(&[&self.branch_name], None, None)?;
+                    let mut retry_fetch_opts = build_fetch_options();
+                    fetch_remote.fetch(&[&self.branch_name], Some(&mut retry_fetch_opts), None)?;
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(wrap_auth_error(e, remote_name)),
             }
         }
 

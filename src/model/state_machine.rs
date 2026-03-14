@@ -51,8 +51,8 @@ impl LifecycleState {
             Self::Resolved => &[Self::Reopened, Self::Closed],
             Self::FalsePositive => &[Self::Reopened, Self::Closed],
             Self::WontFix => &[Self::Reopened, Self::Closed],
-            Self::Deferred => &[Self::Open, Self::Closed],
-            Self::Suppressed => &[Self::Open, Self::Closed],
+            Self::Deferred => &[Self::Open, Self::Reopened, Self::Closed],
+            Self::Suppressed => &[Self::Open, Self::Reopened, Self::Closed],
             Self::Reopened => &[Self::Acknowledged, Self::InProgress],
             Self::Closed => &[], // Terminal — no transitions
         }
