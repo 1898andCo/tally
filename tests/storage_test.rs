@@ -928,3 +928,216 @@ fn sync_diverged_auto_merge() {
         "B should see its own finding after merge"
     );
 }
+
+// =============================================================================
+// Coverage: load_all skips unreadable tree entries (lines 191-193)
+// =============================================================================
+
+#[test]
+fn load_all_skips_unreadable_tree_entry() {
+    let (_tmp, repo_path) = setup_repo();
+    let store = GitFindingsStore::open(&repo_path).expect("open");
+    store.init().expect("init");
+
+    // Save one valid finding
+    let valid_uuid = Uuid::now_v7();
+    store
+        .save_finding(&make_test_finding(valid_uuid))
+        .expect("save valid");
+
+    // Use git2 plumbing to add a subtree (not a blob) as findings/not-a-blob.json
+    // on the findings-data branch. When load_all iterates, read_file will fail on
+    // this entry because find_blob() can't read a tree OID — exercising the Err path.
+    {
+        let repo = Repository::open(&repo_path).expect("open repo");
+        let branch = repo
+            .find_branch("findings-data", BranchType::Local)
+            .expect("branch");
+        let tip = branch
+            .into_reference()
+            .peel_to_commit()
+            .expect("tip commit");
+        let parent_tree = tip.tree().expect("tree");
+
+        // Create an empty tree to use as a fake "blob" entry
+        let empty_tree_oid = repo.treebuilder(None).expect("tb").write().expect("write");
+
+        // Insert the tree OID as if it were a blob under findings/not-a-blob.json.
+        // We use FileMode::Tree so git stores it as a tree entry, which will cause
+        // find_blob() to fail when load_all tries to read it.
+        let mut builder = git2::build::TreeUpdateBuilder::new();
+        builder.upsert("findings/not-a-blob.json", empty_tree_oid, FileMode::Tree);
+        let new_tree_oid = builder
+            .create_updated(&repo, &parent_tree)
+            .expect("build tree");
+        let new_tree = repo.find_tree(new_tree_oid).expect("find tree");
+
+        let sig = git2::Signature::now("test", "test@test.com").expect("sig");
+        repo.commit(
+            Some("refs/heads/findings-data"),
+            &sig,
+            &sig,
+            "add fake tree entry masquerading as JSON",
+            &new_tree,
+            &[&tip],
+        )
+        .expect("commit tree entry");
+    }
+
+    // load_all should return only the valid finding, skipping the tree entry
+    let findings = store.load_all().expect("load_all");
+    assert_eq!(
+        findings.len(),
+        1,
+        "should skip the unreadable tree entry and return only the valid finding"
+    );
+    assert_eq!(findings[0].uuid, valid_uuid);
+}
+
+// =============================================================================
+// Coverage: sync diverged merge creates merge commit with two parents (lines 343-382)
+// =============================================================================
+
+#[test]
+fn sync_diverged_merge_creates_merge_commit() {
+    let (_upstream_tmp, upstream_path) = setup_bare_upstream();
+
+    // Repo A: init and sync to establish remote branch
+    let (_tmp_a, repo_a_path) = setup_repo_with_remote(&upstream_path);
+    let store_a = GitFindingsStore::open(&repo_a_path).expect("open A");
+    store_a.init().expect("init A");
+    store_a.sync("origin").expect("initial sync A");
+
+    // Repo B: fetch from upstream and create local branch from remote tracking ref
+    let (_tmp_b, repo_b_path) = setup_repo_with_remote(&upstream_path);
+    {
+        let repo_b = Repository::open(&repo_b_path).expect("open B raw");
+        let mut remote = repo_b.find_remote("origin").expect("find remote");
+        remote.fetch(&["findings-data"], None, None).expect("fetch");
+        let remote_ref = repo_b
+            .find_reference("refs/remotes/origin/findings-data")
+            .expect("remote ref");
+        let remote_commit = remote_ref.peel_to_commit().expect("peel");
+        repo_b
+            .branch("findings-data", &remote_commit, false)
+            .expect("create local branch from remote");
+    }
+    let store_b = GitFindingsStore::open(&repo_b_path).expect("open B");
+
+    // B saves a finding first (creating a LOCAL commit on findings-data)
+    let uuid_b = Uuid::now_v7();
+    store_b
+        .save_finding(&make_test_finding(uuid_b))
+        .expect("save B");
+
+    // A saves a different finding and syncs (remote now has A's commit)
+    let uuid_a = Uuid::now_v7();
+    store_a
+        .save_finding(&make_test_finding(uuid_a))
+        .expect("save A");
+    store_a.sync("origin").expect("sync A with finding");
+
+    // B syncs — should detect divergence (B has local commit, remote has A's commit)
+    // and create a merge commit
+    let result_b = store_b
+        .sync("origin")
+        .expect("sync B with diverged changes");
+
+    assert!(result_b.merged, "B should have merged diverged branches");
+    assert!(result_b.pushed, "B should have pushed merged result");
+
+    // Verify the merge commit has 2 parents (local + remote)
+    let repo_b = Repository::open(&repo_b_path).expect("open B for verification");
+    let branch = repo_b
+        .find_branch("findings-data", BranchType::Local)
+        .expect("find branch");
+    let merge_commit = branch
+        .into_reference()
+        .peel_to_commit()
+        .expect("peel to commit");
+    assert_eq!(
+        merge_commit.parent_count(),
+        2,
+        "diverged merge should create a commit with 2 parents"
+    );
+
+    // Both findings should be visible in B
+    let findings_b = store_b.load_all().expect("load_all B");
+    assert!(
+        findings_b.iter().any(|f| f.uuid == uuid_a),
+        "B should see A's finding after merge"
+    );
+    assert!(
+        findings_b.iter().any(|f| f.uuid == uuid_b),
+        "B should see its own finding after merge"
+    );
+}
+
+// =============================================================================
+// Coverage: sync same-file conflict handling (lines 360-364)
+// =============================================================================
+
+#[test]
+fn sync_same_file_conflict_handled() {
+    let (_upstream_tmp, upstream_path) = setup_bare_upstream();
+
+    // Repo A: init and sync to establish remote branch with a shared finding
+    let (_tmp_a, repo_a_path) = setup_repo_with_remote(&upstream_path);
+    let store_a = GitFindingsStore::open(&repo_a_path).expect("open A");
+    store_a.init().expect("init A");
+
+    let shared_uuid = Uuid::now_v7();
+    store_a
+        .save_finding(&make_test_finding(shared_uuid))
+        .expect("save shared");
+    store_a.sync("origin").expect("initial sync A");
+
+    // Repo B: fetch and create local branch from remote
+    let (_tmp_b, repo_b_path) = setup_repo_with_remote(&upstream_path);
+    {
+        let repo_b = Repository::open(&repo_b_path).expect("open B raw");
+        let mut remote = repo_b.find_remote("origin").expect("remote");
+        remote.fetch(&["findings-data"], None, None).expect("fetch");
+        let remote_ref = repo_b
+            .find_reference("refs/remotes/origin/findings-data")
+            .expect("remote ref");
+        let remote_commit = remote_ref.peel_to_commit().expect("peel");
+        repo_b
+            .branch("findings-data", &remote_commit, false)
+            .expect("create branch");
+    }
+    let store_b = GitFindingsStore::open(&repo_b_path).expect("open B");
+
+    // A modifies the shared finding
+    let mut finding_a = store_a.load_finding(&shared_uuid).expect("load A");
+    finding_a.title = "Modified by A — completely different text here".to_string();
+    finding_a.description =
+        "A long description that repo A wrote. This content diverges significantly.".to_string();
+    store_a.save_finding(&finding_a).expect("save A");
+    store_a.sync("origin").expect("sync A");
+
+    // B modifies the SAME finding differently (creates divergence on same file)
+    let mut finding_b = store_b.load_finding(&shared_uuid).expect("load B");
+    finding_b.title = "Modified by B — totally incompatible change".to_string();
+    finding_b.description =
+        "B wrote an entirely different description. Cannot auto-merge with A.".to_string();
+    store_b.save_finding(&finding_b).expect("save B");
+
+    // B syncs — both modified the same file
+    // Git may auto-resolve or conflict. Either is acceptable behavior.
+    let result = store_b.sync("origin");
+    match result {
+        Ok(sync_result) => {
+            // Git auto-resolved — valid for small JSON diffs
+            assert!(sync_result.merged, "should have merged");
+        }
+        Err(e) => {
+            // Merge conflict — our error path
+            let msg = e.to_string();
+            assert!(
+                msg.to_lowercase().contains("conflict") || msg.to_lowercase().contains("merge"),
+                "error should mention conflict, got: {msg}"
+            );
+        }
+    }
+}
