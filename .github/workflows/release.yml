@@ -197,3 +197,22 @@ jobs:
             --field content="$(base64 -w0 /tmp/tally.rb)" \
             --field sha="$existing_sha"
         continue-on-error: true
+
+  sync-main:
+    name: Sync main branch
+    needs: [create-release, build-binaries]
+    runs-on: ubuntu-latest
+    if: ${{ !contains(needs.create-release.outputs.tag, '-') }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge develop into main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout main
+          git merge develop --ff-only
+          git push origin main
