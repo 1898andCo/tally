@@ -71,6 +71,18 @@ pub enum Command {
         /// Relationship type (used with `--related-to`).
         #[arg(long, default_value = "related_to")]
         relationship: String,
+
+        /// Category for grouping (e.g., "injection", "auth").
+        #[arg(long, default_value = "")]
+        category: String,
+
+        /// Suggested fix or remediation.
+        #[arg(long)]
+        suggested_fix: Option<String>,
+
+        /// Evidence or code snippet supporting the finding.
+        #[arg(long)]
+        evidence: Option<String>,
     },
 
     /// Query findings with filters.
@@ -90,6 +102,10 @@ pub enum Command {
         /// Filter by rule ID.
         #[arg(long)]
         rule: Option<String>,
+
+        /// Filter by related finding ID (shows findings related to this ID).
+        #[arg(long)]
+        related_to: Option<String>,
 
         /// Output format.
         #[arg(long, value_enum, default_value = "json")]
@@ -146,7 +162,18 @@ pub enum Command {
         /// Agent performing the suppression.
         #[arg(long, default_value = "cli")]
         agent: String,
+
+        /// Suppression type: global, file, or inline.
+        #[arg(long, default_value = "global")]
+        suppression_type: String,
+
+        /// Inline suppression pattern (used with --suppression-type inline).
+        #[arg(long)]
+        suppression_pattern: Option<String>,
     },
+
+    /// Rebuild the index.json from finding files.
+    RebuildIndex,
 
     /// Record multiple findings from a JSONL file or stdin.
     RecordBatch {

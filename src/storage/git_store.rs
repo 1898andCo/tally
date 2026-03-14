@@ -238,6 +238,37 @@ impl GitFindingsStore {
         self.upsert_file("index.json", content.as_bytes(), "Rebuild findings index")
     }
 
+    /// Detect git context (`repo_id`, branch, `commit_sha`) from the current repository.
+    ///
+    /// Returns (`repo_id`, branch, `commit_sha`) where:
+    /// - `repo_id` is derived from the origin remote URL, or empty if no remote
+    /// - `branch` is the current HEAD branch name, or `None` if HEAD is detached/unborn
+    /// - `commit_sha` is the current HEAD commit SHA, or `None` if HEAD is unborn
+    #[must_use]
+    pub fn git_context(&self) -> (String, Option<String>, Option<String>) {
+        let repo_id = self
+            .repo
+            .find_remote("origin")
+            .ok()
+            .and_then(|r| r.url().map(String::from))
+            .unwrap_or_default();
+
+        let branch = self
+            .repo
+            .head()
+            .ok()
+            .and_then(|h| h.shorthand().map(String::from));
+
+        let commit_sha = self
+            .repo
+            .head()
+            .ok()
+            .and_then(|h| h.peel_to_commit().ok())
+            .map(|c| c.id().to_string());
+
+        (repo_id, branch, commit_sha)
+    }
+
     /// Check if the findings branch exists.
     #[must_use]
     pub fn branch_exists(&self) -> bool {

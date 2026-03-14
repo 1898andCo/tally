@@ -41,6 +41,9 @@ pub struct RecordArgs<'a> {
     pub extra_locations: &'a [String],
     pub related_to: Option<&'a str>,
     pub relationship: &'a str,
+    pub category: &'a str,
+    pub suggested_fix: Option<&'a str>,
+    pub evidence: Option<&'a str>,
 }
 
 /// Handle `tally record`.
@@ -113,16 +116,21 @@ pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<
 /// # Errors
 ///
 /// Returns error if storage fails or branch doesn't exist.
+#[allow(clippy::too_many_arguments)]
 pub fn handle_query(
     store: &GitFindingsStore,
     status_filter: Option<&str>,
     severity_filter: Option<&str>,
     file_filter: Option<&str>,
     rule_filter: Option<&str>,
+    related_to_filter: Option<&str>,
     format: OutputFormat,
     limit: usize,
 ) -> Result<()> {
     let mut findings = store.load_all()?;
+
+    // Check for expired suppressions and reopen them
+    check_expiry_and_reopen(store, &mut findings);
 
     if let Some(s) = status_filter {
         if let Ok(status) = s.parse::<LifecycleState>() {
@@ -139,6 +147,15 @@ pub fn handle_query(
     }
     if let Some(rule) = rule_filter {
         findings.retain(|f| f.rule_id == rule);
+    }
+    if let Some(related_id) = related_to_filter {
+        if let Ok(related_uuid) = Uuid::parse_str(related_id) {
+            findings.retain(|f| {
+                f.relationships
+                    .iter()
+                    .any(|r| r.related_finding_id == related_uuid)
+            });
+        }
     }
 
     findings.truncate(limit);
@@ -217,6 +234,17 @@ pub fn handle_update(store: &GitFindingsStore, args: &UpdateArgs<'_>) -> Result<
     Ok(())
 }
 
+/// Handle `tally rebuild-index`.
+///
+/// # Errors
+///
+/// Returns error if storage fails.
+pub fn handle_rebuild_index(store: &GitFindingsStore) -> Result<()> {
+    store.rebuild_index()?;
+    eprintln!("Index rebuilt.");
+    Ok(())
+}
+
 /// Handle `tally suppress`.
 ///
 /// # Errors
@@ -228,6 +256,8 @@ pub fn handle_suppress(
     reason: &str,
     expires: Option<&str>,
     agent: &str,
+    suppression_type_str: &str,
+    suppression_pattern: Option<&str>,
 ) -> Result<()> {
     let uuid = resolve_finding_id(store, id_str)?;
     let mut finding = store.load_finding(&uuid)?;
@@ -256,11 +286,13 @@ pub fn handle_suppress(
         commit_sha: None,
     });
     finding.status = LifecycleState::Suppressed;
+    let parsed_suppression_type =
+        parse_suppression_type(suppression_type_str, suppression_pattern)?;
     finding.suppression = Some(Suppression {
         suppressed_at: Utc::now(),
         reason: reason.to_string(),
         expires_at,
-        suppression_type: SuppressionType::Global,
+        suppression_type: parsed_suppression_type,
     });
     finding.updated_at = Utc::now();
 
@@ -492,6 +524,60 @@ fn resolve_finding_id(store: &GitFindingsStore, id_str: &str) -> Result<Uuid> {
     })
 }
 
+/// Check for expired suppressions and reopen them.
+///
+/// Iterates findings: if `status == Suppressed` and `suppression.expires_at < now`,
+/// transitions to `Open`, clears suppression, and saves.
+fn check_expiry_and_reopen(store: &GitFindingsStore, findings: &mut [Finding]) {
+    let now = Utc::now();
+    for finding in findings.iter_mut() {
+        if finding.status != LifecycleState::Suppressed {
+            continue;
+        }
+        let expired = finding
+            .suppression
+            .as_ref()
+            .and_then(|s| s.expires_at)
+            .is_some_and(|exp| exp < now);
+        if expired {
+            finding.state_history.push(StateTransition {
+                from: LifecycleState::Suppressed,
+                to: LifecycleState::Open,
+                timestamp: now,
+                agent_id: "system".to_string(),
+                reason: Some("Suppression expired".to_string()),
+                commit_sha: None,
+            });
+            finding.status = LifecycleState::Open;
+            finding.suppression = None;
+            finding.updated_at = now;
+            // Best-effort save; don't fail the query if this errors
+            let _ = store.save_finding(finding);
+        }
+    }
+}
+
+/// Parse a suppression type string into a `SuppressionType`.
+fn parse_suppression_type(type_str: &str, pattern: Option<&str>) -> Result<SuppressionType> {
+    match type_str.to_ascii_lowercase().as_str() {
+        "global" => Ok(SuppressionType::Global),
+        "file" | "file_level" => Ok(SuppressionType::FileLevel),
+        "inline" | "inline_comment" => {
+            let p = pattern.ok_or_else(|| {
+                TallyError::InvalidSeverity(
+                    "inline suppression requires --suppression-pattern".to_string(),
+                )
+            })?;
+            Ok(SuppressionType::InlineComment {
+                pattern: p.to_string(),
+            })
+        }
+        other => Err(TallyError::InvalidSeverity(format!(
+            "invalid suppression type: '{other}' (valid: global, file, inline)"
+        ))),
+    }
+}
+
 fn parse_tags(tags_str: &str) -> Vec<String> {
     tags_str
         .split(',')
@@ -508,6 +594,8 @@ fn handle_dedup(store: &GitFindingsStore, uuid: Uuid, args: &RecordArgs<'_>) -> 
         .iter()
         .any(|a| a.agent_id == args.agent && a.session_id == args.session);
 
+    let mut changed = false;
+
     if !already_recorded {
         finding.discovered_by.push(AgentRecord {
             agent_id: args.agent.to_string(),
@@ -515,6 +603,39 @@ fn handle_dedup(store: &GitFindingsStore, uuid: Uuid, args: &RecordArgs<'_>) -> 
             detected_at: Utc::now(),
             session_short_id: None,
         });
+        changed = true;
+    }
+
+    // AC-8: Update primary location if the code moved
+    let new_primary = Location {
+        file_path: args.file.to_string(),
+        line_start: args.line,
+        line_end: args.line_end.unwrap_or(args.line),
+        role: LocationRole::Primary,
+        message: None,
+    };
+    let current_primary = finding
+        .locations
+        .iter()
+        .find(|l| l.role == LocationRole::Primary)
+        .or_else(|| finding.locations.first());
+    if current_primary.is_none_or(|p| *p != new_primary) {
+        // Update the primary location to the new one
+        if let Some(pos) = finding
+            .locations
+            .iter()
+            .position(|l| l.role == LocationRole::Primary)
+        {
+            finding.locations[pos] = new_primary;
+        } else if let Some(first) = finding.locations.first_mut() {
+            *first = new_primary;
+        } else {
+            finding.locations.push(new_primary);
+        }
+        changed = true;
+    }
+
+    if changed {
         finding.updated_at = Utc::now();
         store.save_finding(&finding)?;
     }
@@ -534,18 +655,19 @@ fn create_finding(
     args: &RecordArgs<'_>,
 ) -> Result<Uuid> {
     let new_uuid = Uuid::now_v7();
+    let (repo_id, branch, commit_sha) = store.git_context();
     let finding = Finding {
         uuid: new_uuid,
         content_fingerprint: fingerprint,
         rule_id: args.rule.to_string(),
         locations,
         severity,
-        category: String::new(),
+        category: args.category.to_string(),
         tags: parse_tags(args.tags),
         title: args.title.to_string(),
         description: args.description.to_string(),
-        suggested_fix: None,
-        evidence: None,
+        suggested_fix: args.suggested_fix.map(String::from),
+        evidence: args.evidence.map(String::from),
         status: LifecycleState::Open,
         state_history: vec![],
         discovered_by: vec![AgentRecord {
@@ -556,10 +678,10 @@ fn create_finding(
         }],
         created_at: Utc::now(),
         updated_at: Utc::now(),
-        repo_id: String::new(),
-        branch: None,
+        repo_id,
+        branch,
         pr_number: None,
-        commit_sha: None,
+        commit_sha,
         relationships: vec![],
         suppression: None,
     };

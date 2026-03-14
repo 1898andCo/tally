@@ -50,6 +50,23 @@ pub struct RecordFindingInput {
     pub description: Option<String>,
     #[schemars(description = "Agent identifier (e.g., claude-code)")]
     pub agent: Option<String>,
+    #[schemars(
+        description = "Additional locations (array of {file_path, line_start, line_end, role})"
+    )]
+    pub locations: Option<Vec<LocationInput>>,
+    #[schemars(description = "Suggested fix or remediation")]
+    pub suggested_fix: Option<String>,
+    #[schemars(description = "Evidence or code snippet supporting the finding")]
+    pub evidence: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct LocationInput {
+    pub file_path: String,
+    pub line_start: u32,
+    pub line_end: Option<u32>,
+    #[schemars(description = "primary, secondary, or context")]
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -120,6 +137,10 @@ pub struct BatchFindingInput {
     pub rule_id: String,
     #[schemars(description = "Description")]
     pub description: Option<String>,
+    #[schemars(description = "Suggested fix or remediation")]
+    pub suggested_fix: Option<String>,
+    #[schemars(description = "Evidence or code snippet supporting the finding")]
+    pub evidence: Option<String>,
 }
 
 // --- Output Type ---
@@ -172,7 +193,7 @@ impl TallyMcpServer {
             data: None,
         })?;
 
-        let location = Location {
+        let primary_location = Location {
             file_path: input.file_path.clone(),
             line_start: input.line_start,
             line_end: input.line_end.unwrap_or(input.line_start),
@@ -180,7 +201,34 @@ impl TallyMcpServer {
             message: None,
         };
 
-        let fingerprint = compute_fingerprint(&location, &input.rule_id);
+        // Build locations from input
+        let locations = if let Some(ref loc_inputs) = input.locations {
+            let mut locs = vec![primary_location.clone()];
+            for loc_input in loc_inputs {
+                let role = loc_input
+                    .role
+                    .as_deref()
+                    .map_or(LocationRole::Secondary, |r| {
+                        match r.to_ascii_lowercase().as_str() {
+                            "primary" => LocationRole::Primary,
+                            "context" => LocationRole::Context,
+                            _ => LocationRole::Secondary,
+                        }
+                    });
+                locs.push(Location {
+                    file_path: loc_input.file_path.clone(),
+                    line_start: loc_input.line_start,
+                    line_end: loc_input.line_end.unwrap_or(loc_input.line_start),
+                    role,
+                    message: None,
+                });
+            }
+            locs
+        } else {
+            vec![primary_location.clone()]
+        };
+
+        let fingerprint = compute_fingerprint(&primary_location, &input.rule_id);
         let existing = store.load_all().unwrap_or_default();
         let resolver = FindingIdentityResolver::from_findings(&existing);
         let resolution = resolver.resolve(
@@ -191,6 +239,12 @@ impl TallyMcpServer {
             5,
         );
         let agent = input.agent.as_deref().unwrap_or("mcp-client");
+        let (repo_id, branch, commit_sha) = store.git_context();
+        let ctx = GitContext {
+            repo_id,
+            branch,
+            commit_sha,
+        };
 
         let output = match resolution {
             IdentityResolution::ExistingFinding { uuid } => ToolOutput {
@@ -203,8 +257,15 @@ impl TallyMcpServer {
             },
             IdentityResolution::RelatedFinding { uuid, distance } => {
                 let new_uuid = Uuid::now_v7();
-                let finding =
-                    build_finding(new_uuid, fingerprint, &input, severity, location, agent);
+                let finding = build_finding(
+                    new_uuid,
+                    fingerprint,
+                    &input,
+                    severity,
+                    locations,
+                    agent,
+                    &ctx,
+                );
                 store.save_finding(&finding).map_err(to_mcp_err)?;
                 ToolOutput {
                     status: "created".into(),
@@ -217,8 +278,15 @@ impl TallyMcpServer {
             }
             IdentityResolution::NewFinding => {
                 let new_uuid = Uuid::now_v7();
-                let finding =
-                    build_finding(new_uuid, fingerprint, &input, severity, location, agent);
+                let finding = build_finding(
+                    new_uuid,
+                    fingerprint,
+                    &input,
+                    severity,
+                    locations,
+                    agent,
+                    &ctx,
+                );
                 store.save_finding(&finding).map_err(to_mcp_err)?;
                 ToolOutput {
                     status: "created".into(),
@@ -279,7 +347,7 @@ impl TallyMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let store = self.store()?;
-        let uuid = parse_uuid_mcp(&input.finding_id)?;
+        let uuid = resolve_id_mcp(&store, &input.finding_id)?;
         let new_status: LifecycleState =
             input.new_status.parse().map_err(|e: String| McpError {
                 code: ErrorCode::INVALID_REQUEST,
@@ -340,7 +408,7 @@ impl TallyMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let store = self.store()?;
-        let uuid = parse_uuid_mcp(&input.finding_id)?;
+        let uuid = resolve_id_mcp(&store, &input.finding_id)?;
         let finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&finding).unwrap_or_default(),
@@ -397,7 +465,7 @@ impl TallyMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let store = self.store()?;
-        let uuid = parse_uuid_mcp(&input.finding_id)?;
+        let uuid = resolve_id_mcp(&store, &input.finding_id)?;
         let mut finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
 
         if !finding.status.can_transition_to(LifecycleState::Suppressed) {
@@ -549,6 +617,13 @@ impl ServerHandler for TallyMcpServer {
 
 // --- Helpers ---
 
+/// Git context for populating findings.
+struct GitContext {
+    repo_id: String,
+    branch: Option<String>,
+    commit_sha: Option<String>,
+}
+
 #[allow(clippy::needless_pass_by_value)] // map_err requires FnOnce(E) -> F by value
 fn to_mcp_err(e: crate::error::TallyError) -> McpError {
     McpError {
@@ -558,10 +633,23 @@ fn to_mcp_err(e: crate::error::TallyError) -> McpError {
     }
 }
 
-fn parse_uuid_mcp(id: &str) -> Result<Uuid, McpError> {
-    Uuid::parse_str(id).map_err(|_| McpError {
+/// Resolve a finding ID that can be either a UUID or a session short ID.
+fn resolve_id_mcp(store: &GitFindingsStore, id: &str) -> Result<Uuid, McpError> {
+    // Try UUID first
+    if let Ok(uuid) = Uuid::parse_str(id) {
+        return Ok(uuid);
+    }
+
+    // Try short ID — load all findings to build the mapper
+    let findings = store.load_all().map_err(to_mcp_err)?;
+    let mut mapper = crate::session::SessionIdMapper::new();
+    for finding in &findings {
+        mapper.assign(finding.uuid, finding.severity);
+    }
+
+    mapper.resolve(id).ok_or_else(|| McpError {
         code: ErrorCode::INVALID_REQUEST,
-        message: format!("Invalid UUID: {id}").into(),
+        message: format!("Invalid finding ID: {id} (not a UUID or known short ID)").into(),
         data: None,
     })
 }
@@ -607,8 +695,8 @@ fn record_batch_entry(
                 tags: vec![],
                 title: entry.title.clone(),
                 description: entry.description.clone().unwrap_or_default(),
-                suggested_fix: None,
-                evidence: None,
+                suggested_fix: entry.suggested_fix.clone(),
+                evidence: entry.evidence.clone(),
                 status: LifecycleState::Open,
                 state_history: vec![],
                 discovered_by: vec![AgentRecord {
@@ -637,21 +725,22 @@ fn build_finding(
     fingerprint: String,
     input: &RecordFindingInput,
     severity: Severity,
-    location: Location,
+    locations: Vec<Location>,
     agent: &str,
+    ctx: &GitContext,
 ) -> Finding {
     Finding {
         uuid,
         content_fingerprint: fingerprint,
         rule_id: input.rule_id.clone(),
-        locations: vec![location],
+        locations,
         severity,
         category: String::new(),
         tags: vec![],
         title: input.title.clone(),
         description: input.description.clone().unwrap_or_default(),
-        suggested_fix: None,
-        evidence: None,
+        suggested_fix: input.suggested_fix.clone(),
+        evidence: input.evidence.clone(),
         status: LifecycleState::Open,
         state_history: vec![],
         discovered_by: vec![AgentRecord {
@@ -662,10 +751,10 @@ fn build_finding(
         }],
         created_at: Utc::now(),
         updated_at: Utc::now(),
-        repo_id: String::new(),
-        branch: None,
+        repo_id: ctx.repo_id.clone(),
+        branch: ctx.branch.clone(),
         pr_number: None,
-        commit_sha: None,
+        commit_sha: ctx.commit_sha.clone(),
         relationships: vec![],
         suppression: None,
     }
@@ -680,6 +769,8 @@ fn read_resource_summary(store: &GitFindingsStore) -> Result<String, McpError> {
         *by_severity.entry(f.severity.to_string()).or_insert(0u32) += 1;
         *by_status.entry(f.status.to_string()).or_insert(0u32) += 1;
     }
+
+    let total = findings.len();
 
     // 10 most recent findings
     let mut recent = findings;
@@ -700,7 +791,7 @@ fn read_resource_summary(store: &GitFindingsStore) -> Result<String, McpError> {
         .collect();
 
     let summary = serde_json::json!({
-        "total": recent_summaries.len(),
+        "total": total,
         "by_severity": by_severity,
         "by_status": by_status,
         "recent": recent_summaries,
@@ -728,7 +819,7 @@ fn read_resource_file(store: &GitFindingsStore, path: &str) -> Result<String, Mc
 }
 
 fn read_resource_detail(store: &GitFindingsStore, uuid_str: &str) -> Result<String, McpError> {
-    let uuid = parse_uuid_mcp(uuid_str)?;
+    let uuid = resolve_id_mcp(store, uuid_str)?;
     let finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
 
     serde_json::to_string_pretty(&finding).map_err(|e| McpError {

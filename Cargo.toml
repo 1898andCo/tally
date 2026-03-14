@@ -9,7 +9,6 @@ repository = "https://github.com/1898andCo/tally"
 
 [dependencies]
 anyhow = "1"
-async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 comfy-table = "7"

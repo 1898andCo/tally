@@ -27,6 +27,7 @@ fn store() -> tally::error::Result<GitFindingsStore> {
     GitFindingsStore::open(".")
 }
 
+#[allow(clippy::too_many_lines)] // dispatch function maps 1:1 with CLI subcommands
 fn run(cli: Cli) -> tally::error::Result<()> {
     match cli.command {
         Command::Init => handlers::handle_init(&store()?),
@@ -44,6 +45,9 @@ fn run(cli: Cli) -> tally::error::Result<()> {
             location,
             related_to,
             relationship,
+            category,
+            suggested_fix,
+            evidence,
         } => handlers::handle_record(
             &store()?,
             &handlers::RecordArgs {
@@ -60,6 +64,9 @@ fn run(cli: Cli) -> tally::error::Result<()> {
                 extra_locations: &location,
                 related_to: related_to.as_deref(),
                 relationship: &relationship,
+                category: &category,
+                suggested_fix: suggested_fix.as_deref(),
+                evidence: evidence.as_deref(),
             },
         ),
         Command::Query {
@@ -67,6 +74,7 @@ fn run(cli: Cli) -> tally::error::Result<()> {
             severity,
             file,
             rule,
+            related_to,
             format,
             limit,
         } => handlers::handle_query(
@@ -75,6 +83,7 @@ fn run(cli: Cli) -> tally::error::Result<()> {
             severity.as_deref(),
             file.as_deref(),
             rule.as_deref(),
+            related_to.as_deref(),
             format,
             limit,
         ),
@@ -103,7 +112,18 @@ fn run(cli: Cli) -> tally::error::Result<()> {
             reason,
             expires,
             agent,
-        } => handlers::handle_suppress(&store()?, &id, &reason, expires.as_deref(), &agent),
+            suppression_type,
+            suppression_pattern,
+        } => handlers::handle_suppress(
+            &store()?,
+            &id,
+            &reason,
+            expires.as_deref(),
+            &agent,
+            &suppression_type,
+            suppression_pattern.as_deref(),
+        ),
+        Command::RebuildIndex => handlers::handle_rebuild_index(&store()?),
         Command::RecordBatch { input, agent } => {
             handlers::handle_record_batch(&store()?, &input, &agent)
         }
