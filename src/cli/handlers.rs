@@ -10,6 +10,7 @@ use crate::model::{
     LifecycleState, Location, LocationRole, RelationshipType, Severity, StateTransition,
     Suppression, SuppressionType, compute_fingerprint,
 };
+use crate::session::SessionIdMapper;
 use crate::storage::GitFindingsStore;
 
 use super::OutputFormat;
@@ -125,9 +126,15 @@ pub fn handle_query(
 
     findings.truncate(limit);
 
+    // Assign session short IDs for display
+    let mut mapper = SessionIdMapper::new();
+    for finding in &findings {
+        mapper.assign(finding.uuid, finding.severity);
+    }
+
     match format {
-        OutputFormat::Json => print_json(&findings),
-        OutputFormat::Table => print_table(&findings),
+        OutputFormat::Json => print_json_with_short_ids(&findings, &mapper),
+        OutputFormat::Table => print_table(&findings, &mapper),
         OutputFormat::Summary => print_summary(&findings),
     }
 
@@ -147,7 +154,7 @@ pub fn handle_update(
     commit_sha: Option<&str>,
     agent: &str,
 ) -> Result<()> {
-    let uuid = parse_uuid(id_str)?;
+    let uuid = resolve_finding_id(store, id_str)?;
     let new_status: LifecycleState = status_str
         .parse()
         .map_err(|e: String| TallyError::InvalidSeverity(e))?;
@@ -195,7 +202,7 @@ pub fn handle_suppress(
     expires: Option<&str>,
     agent: &str,
 ) -> Result<()> {
-    let uuid = parse_uuid(id_str)?;
+    let uuid = resolve_finding_id(store, id_str)?;
     let mut finding = store.load_finding(&uuid)?;
 
     if !finding.status.can_transition_to(LifecycleState::Suppressed) {
@@ -279,8 +286,23 @@ pub fn handle_stats(store: &GitFindingsStore) -> Result<()> {
 // Private helpers
 // =============================================================================
 
-fn parse_uuid(id_str: &str) -> Result<Uuid> {
-    Uuid::parse_str(id_str).map_err(|_| TallyError::NotFound {
+/// Resolve a finding ID that can be either a UUID or a session short ID (C1, I2, etc.).
+///
+/// Loads all findings to build a session mapper if the input isn't a valid UUID.
+fn resolve_finding_id(store: &GitFindingsStore, id_str: &str) -> Result<Uuid> {
+    // Try UUID first
+    if let Ok(uuid) = Uuid::parse_str(id_str) {
+        return Ok(uuid);
+    }
+
+    // Try short ID — need to load all findings to build the mapper
+    let findings = store.load_all()?;
+    let mut mapper = SessionIdMapper::new();
+    for finding in &findings {
+        mapper.assign(finding.uuid, finding.severity);
+    }
+
+    mapper.resolve(id_str).ok_or_else(|| TallyError::NotFound {
         uuid: id_str.to_string(),
     })
 }
@@ -384,7 +406,26 @@ fn print_json(value: &impl serde::Serialize) {
     }
 }
 
-fn print_table(findings: &[Finding]) {
+fn print_json_with_short_ids(findings: &[Finding], mapper: &SessionIdMapper) {
+    #[derive(serde::Serialize)]
+    struct FindingWithShortId<'a> {
+        short_id: &'a str,
+        #[serde(flatten)]
+        finding: &'a Finding,
+    }
+
+    let enriched: Vec<FindingWithShortId<'_>> = findings
+        .iter()
+        .map(|f| FindingWithShortId {
+            short_id: mapper.short_id(&f.uuid).unwrap_or("?"),
+            finding: f,
+        })
+        .collect();
+
+    print_json(&enriched);
+}
+
+fn print_table(findings: &[Finding], mapper: &SessionIdMapper) {
     if findings.is_empty() {
         println!("No findings.");
         return;
@@ -392,9 +433,10 @@ fn print_table(findings: &[Finding]) {
 
     let mut table = Table::new();
     table.load_preset(UTF8_FULL_CONDENSED);
-    table.set_header(vec!["UUID", "Severity", "Status", "File", "Line", "Title"]);
+    table.set_header(vec!["ID", "UUID", "Severity", "Status", "File", "Line", "Title"]);
 
     for finding in findings {
+        let short = mapper.short_id(&finding.uuid).unwrap_or("?");
         let (file, line) = finding
             .locations
             .first()
@@ -403,6 +445,7 @@ fn print_table(findings: &[Finding]) {
             });
 
         table.add_row(vec![
+            short,
             &finding.uuid.to_string()[..8],
             &finding.severity.to_string(),
             &finding.status.to_string(),

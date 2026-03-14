@@ -298,6 +298,58 @@ fn cli_update_invalid_transition_fails() {
 }
 
 #[test]
+fn cli_query_json_includes_short_id() {
+    let tmp = setup_cli_repo();
+    tally().arg("init").current_dir(tmp.path()).assert().success();
+
+    tally()
+        .args([
+            "record",
+            "--file", "src/main.rs",
+            "--line", "42",
+            "--severity", "critical",
+            "--title", "test",
+            "--rule", "test-rule",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"short_id\": \"C1\""));
+}
+
+#[test]
+fn cli_query_table_includes_short_id_column() {
+    let tmp = setup_cli_repo();
+    tally().arg("init").current_dir(tmp.path()).assert().success();
+
+    tally()
+        .args([
+            "record",
+            "--file", "src/main.rs",
+            "--line", "42",
+            "--severity", "important",
+            "--title", "test",
+            "--rule", "test-rule",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args(["query", "--format", "table"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("I1"));
+}
+
+#[test]
 fn cli_outside_git_repo_fails() {
     let tmp = tempfile::tempdir().expect("tempdir");
     // No git init — just an empty directory
