@@ -172,6 +172,12 @@ impl TallyMcpServer {
         }
     }
 
+    /// Get the repository path this server operates on.
+    #[must_use]
+    pub fn repo_path(&self) -> &str {
+        &self.repo_path
+    }
+
     fn store(&self) -> Result<GitFindingsStore, McpError> {
         GitFindingsStore::open(&self.repo_path).map_err(|e| McpError {
             code: ErrorCode(-1),
@@ -181,7 +187,7 @@ impl TallyMcpServer {
     }
 
     #[tool(description = "Record a new finding or deduplicate with an existing one")]
-    async fn record_finding(
+    pub async fn record_finding(
         &self,
         params: Parameters<RecordFindingInput>,
     ) -> Result<CallToolResult, McpError> {
@@ -305,7 +311,7 @@ impl TallyMcpServer {
     }
 
     #[tool(description = "Query findings with filters")]
-    async fn query_findings(
+    pub async fn query_findings(
         &self,
         params: Parameters<QueryFindingsInput>,
     ) -> Result<CallToolResult, McpError> {
@@ -341,7 +347,7 @@ impl TallyMcpServer {
     }
 
     #[tool(description = "Update a finding's lifecycle status")]
-    async fn update_finding_status(
+    pub async fn update_finding_status(
         &self,
         params: Parameters<UpdateStatusInput>,
     ) -> Result<CallToolResult, McpError> {
@@ -402,7 +408,7 @@ impl TallyMcpServer {
     }
 
     #[tool(description = "Get finding details with full context")]
-    async fn get_finding_context(
+    pub async fn get_finding_context(
         &self,
         params: Parameters<GetContextInput>,
     ) -> Result<CallToolResult, McpError> {
@@ -416,7 +422,7 @@ impl TallyMcpServer {
     }
 
     #[tool(description = "Record multiple findings in batch (partial success semantics)")]
-    async fn record_batch(
+    pub async fn record_batch(
         &self,
         params: Parameters<RecordBatchInput>,
     ) -> Result<CallToolResult, McpError> {
@@ -459,7 +465,7 @@ impl TallyMcpServer {
     }
 
     #[tool(description = "Suppress a finding with reason and optional expiry")]
-    async fn suppress_finding(
+    pub async fn suppress_finding(
         &self,
         params: Parameters<SuppressFindingInput>,
     ) -> Result<CallToolResult, McpError> {
@@ -760,7 +766,12 @@ fn build_finding(
     }
 }
 
-fn read_resource_summary(store: &GitFindingsStore) -> Result<String, McpError> {
+/// Read the `findings://summary` resource — counts by severity/status + 10 most recent.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage or serialization fails.
+pub fn read_resource_summary(store: &GitFindingsStore) -> Result<String, McpError> {
     let findings = store.load_all().map_err(to_mcp_err)?;
 
     let mut by_severity = std::collections::HashMap::new();
@@ -804,7 +815,12 @@ fn read_resource_summary(store: &GitFindingsStore) -> Result<String, McpError> {
     })
 }
 
-fn read_resource_file(store: &GitFindingsStore, path: &str) -> Result<String, McpError> {
+/// Read the `findings://file/{path}` resource — all findings in a specific file.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage or serialization fails.
+pub fn read_resource_file(store: &GitFindingsStore, path: &str) -> Result<String, McpError> {
     let findings = store.load_all().map_err(to_mcp_err)?;
     let matched: Vec<&Finding> = findings
         .iter()
@@ -818,7 +834,12 @@ fn read_resource_file(store: &GitFindingsStore, path: &str) -> Result<String, Mc
     })
 }
 
-fn read_resource_detail(store: &GitFindingsStore, uuid_str: &str) -> Result<String, McpError> {
+/// Read the `findings://detail/{uuid}` resource — full finding with history.
+///
+/// # Errors
+///
+/// Returns `McpError` if the finding is not found or serialization fails.
+pub fn read_resource_detail(store: &GitFindingsStore, uuid_str: &str) -> Result<String, McpError> {
     let uuid = resolve_id_mcp(store, uuid_str)?;
     let finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
 
