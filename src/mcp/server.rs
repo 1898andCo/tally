@@ -183,6 +183,28 @@ pub struct BatchFindingInput {
 
 // --- Output Type ---
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExportFindingsInput {
+    #[schemars(
+        description = "Export format: json (full finding objects), csv (spreadsheet-compatible), or sarif (GitHub Code Scanning compatible SARIF 2.1.0)"
+    )]
+    pub format: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SyncFindingsInput {
+    #[schemars(description = "Git remote name to sync with (default: origin)")]
+    pub remote: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ImportFindingsInput {
+    #[schemars(
+        description = "Absolute or relative path to a dclaude or zclaude JSON state file to import findings from"
+    )]
+    pub file_path: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct ToolOutput {
     status: String,
@@ -591,6 +613,268 @@ impl TallyMcpServer {
             .unwrap_or_default(),
         )]))
     }
+
+    #[tool(
+        description = "Initialize the tally findings store. Creates the findings-data orphan branch with schema.json and empty findings directory. Idempotent — safe to call multiple times. Must be called before recording any findings."
+    )]
+    pub async fn initialize_store(&self) -> Result<CallToolResult, McpError> {
+        let store = self.store()?;
+        store.init().map_err(to_mcp_err)?;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&ToolOutput {
+                status: "initialized".into(),
+                uuid: None,
+                message: Some("findings-data branch ready".into()),
+                related_to: None,
+                distance: None,
+                expires_at: None,
+            })
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Export all findings in the specified format. Returns the exported content as text. Formats: json (full finding objects), csv (spreadsheet-compatible with columns: uuid, severity, status, file, line, title, rule), sarif (SARIF 2.1.0 for GitHub Code Scanning upload)."
+    )]
+    pub async fn export_findings(
+        &self,
+        params: Parameters<ExportFindingsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+        let findings = store.load_all().map_err(to_mcp_err)?;
+
+        let content = match input.format.to_ascii_lowercase().as_str() {
+            "json" => serde_json::to_string_pretty(&findings).unwrap_or_default(),
+            "csv" => crate::cli::handlers::export_csv(&findings),
+            "sarif" => crate::cli::handlers::export_sarif(&findings),
+            other => {
+                return Err(McpError {
+                    code: ErrorCode::INVALID_REQUEST,
+                    message: format!("Unknown format '{other}'. Use json, csv, or sarif.").into(),
+                    data: None,
+                });
+            }
+        };
+
+        Ok(CallToolResult::success(vec![Content::text(content)]))
+    }
+
+    #[tool(
+        description = "Sync the findings-data branch with a remote. Fetches remote changes, merges them with local findings, and pushes the result. Use this for multi-agent collaboration to share findings across machines."
+    )]
+    pub async fn sync_findings(
+        &self,
+        params: Parameters<SyncFindingsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+        let remote = input.remote.as_deref().unwrap_or("origin");
+        let result = store.sync(remote).map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "synced",
+                "fetched": result.fetched,
+                "merged": result.merged,
+                "pushed": result.pushed,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Rebuild the index.json from finding files on the findings-data branch. Use this if the index becomes out of sync, or after manual edits to finding files."
+    )]
+    pub async fn rebuild_index(&self) -> Result<CallToolResult, McpError> {
+        let store = self.store()?;
+        store.rebuild_index().map_err(to_mcp_err)?;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&ToolOutput {
+                status: "rebuilt".into(),
+                uuid: None,
+                message: Some("index.json rebuilt from finding files".into()),
+                related_to: None,
+                distance: None,
+                expires_at: None,
+            })
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Import findings from a dclaude or zclaude JSON state file. Converts findings from the legacy format into tally's native format. Returns count of imported and skipped findings."
+    )]
+    pub async fn import_findings(
+        &self,
+        params: Parameters<ImportFindingsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+
+        let content = std::fs::read_to_string(&input.file_path).map_err(|e| McpError {
+            code: ErrorCode(-1),
+            message: format!("Failed to read file: {e}").into(),
+            data: None,
+        })?;
+        let state: serde_json::Value = serde_json::from_str(&content).map_err(|e| McpError {
+            code: ErrorCode::INVALID_REQUEST,
+            message: format!("Invalid JSON: {e}").into(),
+            data: None,
+        })?;
+
+        let findings_arr = state
+            .get("active_cycle")
+            .and_then(|c| c.get("findings"))
+            .and_then(|f| f.as_array())
+            .or_else(|| {
+                state
+                    .get("reviews")
+                    .and_then(|r| r.as_array())
+                    .and_then(|reviews| reviews.last())
+                    .and_then(|r| r.get("findings"))
+                    .and_then(|f| f.as_array())
+            });
+
+        let Some(findings) = findings_arr else {
+            return Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "status": "no_findings",
+                    "message": "No findings found. Expected dclaude or zclaude format.",
+                    "imported": 0,
+                    "skipped": 0,
+                }))
+                .unwrap_or_default(),
+            )]));
+        };
+
+        let mut imported: u32 = 0;
+        let mut skipped: u32 = 0;
+
+        for entry in findings {
+            match import_finding_from_json(entry, &store) {
+                Ok(_) => imported += 1,
+                Err(_) => skipped += 1,
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "imported",
+                "imported": imported,
+                "skipped": skipped,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+}
+
+/// Import a single finding from dclaude/zclaude JSON format (MCP helper).
+fn import_finding_from_json(
+    entry: &serde_json::Value,
+    store: &GitFindingsStore,
+) -> Result<Uuid, McpError> {
+    use crate::model::{
+        AgentRecord, Finding, Location, LocationRole, Severity, compute_fingerprint,
+        default_schema_version,
+    };
+
+    let title = entry
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Imported finding");
+    let file = entry
+        .get("file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let line: u32 = entry
+        .get("lines")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(1);
+
+    let severity = match entry.get("severity").and_then(|v| v.as_str()) {
+        Some("critical") => Severity::Critical,
+        Some("important") => Severity::Important,
+        Some("suggestion") => Severity::Suggestion,
+        Some("tech_debt") => Severity::TechDebt,
+        _ => {
+            let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if id.starts_with('C') {
+                Severity::Critical
+            } else if id.starts_with('I') {
+                Severity::Important
+            } else {
+                Severity::Suggestion
+            }
+        }
+    };
+
+    let status = match entry.get("status").and_then(|v| v.as_str()) {
+        Some("verified") => LifecycleState::Resolved,
+        Some("skipped") => LifecycleState::Deferred,
+        Some("wont_fix") => LifecycleState::WontFix,
+        _ => LifecycleState::Open,
+    };
+
+    let category = entry
+        .get("category")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let location = Location {
+        file_path: file.to_string(),
+        line_start: line,
+        line_end: line,
+        role: LocationRole::Primary,
+        message: None,
+    };
+
+    let rule_id = if category.is_empty() {
+        "imported".to_string()
+    } else {
+        category.clone()
+    };
+
+    let fingerprint = compute_fingerprint(&location, &rule_id);
+    let new_uuid = Uuid::now_v7();
+
+    let finding = Finding {
+        schema_version: default_schema_version(),
+        uuid: new_uuid,
+        content_fingerprint: fingerprint,
+        rule_id,
+        locations: vec![location],
+        severity,
+        category,
+        tags: vec!["imported".to_string()],
+        title: title.to_string(),
+        description: String::new(),
+        suggested_fix: None,
+        evidence: None,
+        status,
+        state_history: vec![],
+        discovered_by: vec![AgentRecord {
+            agent_id: "import".to_string(),
+            session_id: String::new(),
+            detected_at: Utc::now(),
+            session_short_id: entry.get("id").and_then(|v| v.as_str()).map(String::from),
+        }],
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        repo_id: String::new(),
+        branch: None,
+        pr_number: None,
+        commit_sha: None,
+        relationships: vec![],
+        suppression: None,
+    };
+
+    store.save_finding(&finding).map_err(to_mcp_err)?;
+    Ok(new_uuid)
 }
 
 // --- Prompt Implementations ---

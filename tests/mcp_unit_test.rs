@@ -5,8 +5,9 @@
 
 use rmcp::handler::server::wrapper::Parameters;
 use tally_ng::mcp::server::{
-    BatchFindingInput, GetContextInput, LocationInput, QueryFindingsInput, RecordBatchInput,
-    RecordFindingInput, SuppressFindingInput, TallyMcpServer, UpdateStatusInput,
+    BatchFindingInput, ExportFindingsInput, GetContextInput, ImportFindingsInput, LocationInput,
+    QueryFindingsInput, RecordBatchInput, RecordFindingInput, SuppressFindingInput,
+    SyncFindingsInput, TallyMcpServer, UpdateStatusInput,
 };
 use tally_ng::storage::GitFindingsStore;
 
@@ -1271,4 +1272,223 @@ async fn mcp_unit_prompt_explain_finding() {
         text.contains("plain language"),
         "should ask for explanation"
     );
+}
+
+// =============================================================================
+// initialize_store
+// =============================================================================
+
+#[tokio::test]
+async fn mcp_unit_initialize_store_idempotent() {
+    // setup_mcp already calls init, so calling again should be idempotent
+    let (_tmp, server) = setup_mcp();
+    let result = server.initialize_store().await;
+    assert!(result.is_ok());
+    let text = extract_tool_text(&result.expect("ok"));
+    assert!(text.contains("initialized"), "should report initialized");
+}
+
+#[tokio::test]
+async fn mcp_unit_initialize_store_fresh_repo() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo_path = tmp.path().to_str().expect("path").to_string();
+
+    // git init + initial commit, but do NOT call store.init()
+    {
+        let repo = git2::Repository::init(tmp.path()).expect("init");
+        let sig = git2::Signature::now("test", "test@test.com").expect("sig");
+        let blob = repo.blob(b"# test").expect("blob");
+        let mut builder = repo.treebuilder(None).expect("tb");
+        builder
+            .insert("README.md", blob, 0o100_644)
+            .expect("insert");
+        let tree_oid = builder.write().expect("write");
+        let tree = repo.find_tree(tree_oid).expect("tree");
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .expect("commit");
+    }
+
+    let server = TallyMcpServer::new(repo_path);
+    let result = server.initialize_store().await;
+    assert!(result.is_ok());
+    let text = extract_tool_text(&result.expect("ok"));
+    assert!(text.contains("initialized"), "should report initialized");
+}
+
+// =============================================================================
+// export_findings
+// =============================================================================
+
+async fn record_sample(server: &TallyMcpServer) {
+    let input = make_record_input("src/main.rs", 42, "critical", "test finding", "unsafe-unwrap");
+    server
+        .record_finding(Parameters(input))
+        .await
+        .expect("record");
+}
+
+#[tokio::test]
+async fn mcp_unit_export_json() {
+    let (_tmp, server) = setup_mcp();
+    record_sample(&server).await;
+
+    let result = server
+        .export_findings(Parameters(ExportFindingsInput {
+            format: "json".into(),
+        }))
+        .await;
+    assert!(result.is_ok());
+    let text = extract_tool_text(&result.expect("ok"));
+    assert!(text.contains("unsafe-unwrap"), "should contain finding");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+    assert!(parsed.is_array(), "should be array");
+}
+
+#[tokio::test]
+async fn mcp_unit_export_csv() {
+    let (_tmp, server) = setup_mcp();
+    record_sample(&server).await;
+
+    let result = server
+        .export_findings(Parameters(ExportFindingsInput {
+            format: "csv".into(),
+        }))
+        .await;
+    assert!(result.is_ok());
+    let text = extract_tool_text(&result.expect("ok"));
+    assert!(
+        text.contains("uuid,severity,status,rule_id,file_path"),
+        "should have CSV header"
+    );
+}
+
+#[tokio::test]
+async fn mcp_unit_export_sarif() {
+    let (_tmp, server) = setup_mcp();
+    record_sample(&server).await;
+
+    let result = server
+        .export_findings(Parameters(ExportFindingsInput {
+            format: "sarif".into(),
+        }))
+        .await;
+    assert!(result.is_ok());
+    let text = extract_tool_text(&result.expect("ok"));
+    assert!(text.contains("sarif-schema-2.1.0"), "should be SARIF");
+}
+
+#[tokio::test]
+async fn mcp_unit_export_invalid_format() {
+    let (_tmp, server) = setup_mcp();
+
+    let result = server
+        .export_findings(Parameters(ExportFindingsInput {
+            format: "xml".into(),
+        }))
+        .await;
+    assert!(result.is_err(), "should reject unknown format");
+}
+
+// =============================================================================
+// sync_findings
+// =============================================================================
+
+#[tokio::test]
+async fn mcp_unit_sync_no_remote_fails() {
+    let (_tmp, server) = setup_mcp();
+
+    let result = server
+        .sync_findings(Parameters(SyncFindingsInput { remote: None }))
+        .await;
+    assert!(result.is_err(), "should fail without remote");
+}
+
+// =============================================================================
+// rebuild_index
+// =============================================================================
+
+#[tokio::test]
+async fn mcp_unit_rebuild_index() {
+    let (_tmp, server) = setup_mcp();
+    record_sample(&server).await;
+
+    let result = server.rebuild_index().await;
+    assert!(result.is_ok());
+    let text = extract_tool_text(&result.expect("ok"));
+    assert!(text.contains("rebuilt"), "should report rebuilt");
+}
+
+// =============================================================================
+// import_findings
+// =============================================================================
+
+#[tokio::test]
+async fn mcp_unit_import_dclaude_format() {
+    let (_tmp, server) = setup_mcp();
+
+    let import_file = tempfile::NamedTempFile::new().expect("temp file");
+    let state = serde_json::json!({
+        "active_cycle": {
+            "findings": [
+                {
+                    "id": "C1",
+                    "title": "SQL injection",
+                    "file": "src/api.rs",
+                    "lines": [42],
+                    "severity": "critical",
+                    "category": "injection",
+                    "status": "open"
+                },
+                {
+                    "id": "I1",
+                    "title": "Missing validation",
+                    "file": "src/api.rs",
+                    "lines": [10],
+                    "severity": "important",
+                    "status": "verified"
+                }
+            ]
+        }
+    });
+    std::fs::write(import_file.path(), state.to_string()).expect("write");
+
+    let result = server
+        .import_findings(Parameters(ImportFindingsInput {
+            file_path: import_file.path().to_str().expect("path").into(),
+        }))
+        .await;
+    assert!(result.is_ok());
+    let text = extract_tool_text(&result.expect("ok"));
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+    assert_eq!(parsed["imported"], 2);
+    assert_eq!(parsed["skipped"], 0);
+}
+
+#[tokio::test]
+async fn mcp_unit_import_missing_file() {
+    let (_tmp, server) = setup_mcp();
+
+    let result = server
+        .import_findings(Parameters(ImportFindingsInput {
+            file_path: "/nonexistent/file.json".into(),
+        }))
+        .await;
+    assert!(result.is_err(), "should fail for missing file");
+}
+
+#[tokio::test]
+async fn mcp_unit_import_no_findings() {
+    let (_tmp, server) = setup_mcp();
+
+    let import_file = tempfile::NamedTempFile::new().expect("temp file");
+    std::fs::write(import_file.path(), r#"{"other": "data"}"#).expect("write");
+
+    let result = server
+        .import_findings(Parameters(ImportFindingsInput {
+            file_path: import_file.path().to_str().expect("path").into(),
+        }))
+        .await;
+    assert!(result.is_ok());
+    let text = extract_tool_text(&result.expect("ok"));
+    assert!(text.contains("no_findings"), "should report no findings");
 }

@@ -11,7 +11,7 @@ Provides persistent, content-addressable finding identity across sessions, agent
 - **Multi-agent**: Cross-agent deduplication via fingerprint matching, session-scoped short IDs (C1, I2, S3, TD4)
 - **Git-backed**: One-file-per-finding on an orphan branch, zero merge conflicts for concurrent writes
 - **Dual interface**: CLI for scripts/CI + MCP server for Claude Code, Cursor, Windsurf
-- **MCP server**: 6 tools, 6 resource templates, 5 prompt templates with rich descriptions for AI agents
+- **MCP server**: 11 tools, 6 resource templates, 5 prompt templates with rich descriptions for AI agents
 - **Export**: SARIF 2.1.0 (GitHub Code Scanning), CSV, JSON
 - **Import**: dclaude and zclaude state file migration
 - **Schema evolution**: Versioned findings with forward-compatible deserialization
@@ -205,16 +205,21 @@ Configure in `.mcp.json` for Claude Code:
 }
 ```
 
-### Tools (6)
+### Tools (11)
 
 | Tool | Description |
 |------|-------------|
+| `initialize_store` | Initialize the findings-data branch (idempotent) |
 | `record_finding` | Create or deduplicate a finding |
 | `record_batch` | Batch record multiple findings |
 | `query_findings` | Search with filters |
 | `update_finding_status` | Transition lifecycle state |
 | `get_finding_context` | Retrieve finding with full context |
 | `suppress_finding` | Suppress with reason and expiry |
+| `export_findings` | Export as JSON, CSV, or SARIF 2.1.0 |
+| `sync_findings` | Sync findings-data branch with remote |
+| `rebuild_index` | Rebuild index.json from finding files |
+| `import_findings` | Import from dclaude/zclaude state files |
 
 ### Resources (6)
 

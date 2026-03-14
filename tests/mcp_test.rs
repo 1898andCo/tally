@@ -240,6 +240,11 @@ fn mcp_list_tools() {
         "update_finding_status",
         "get_finding_context",
         "suppress_finding",
+        "initialize_store",
+        "export_findings",
+        "sync_findings",
+        "rebuild_index",
+        "import_findings",
     ];
     for name in &expected {
         assert!(names.contains(name), "missing tool: {name}");
