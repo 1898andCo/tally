@@ -222,6 +222,9 @@ pub enum Command {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+
+    /// List available MCP capabilities (tools, resources, prompts).
+    McpCapabilities,
 }
 
 #[derive(Clone, Copy, ValueEnum)]

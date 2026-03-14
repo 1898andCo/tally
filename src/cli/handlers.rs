@@ -346,6 +346,52 @@ pub fn handle_stats(store: &GitFindingsStore) -> Result<()> {
     Ok(())
 }
 
+/// Handle `tally mcp-capabilities` — list all MCP tools, resources, and prompts.
+pub fn handle_mcp_capabilities() {
+    println!(
+        "MCP Capabilities for tally v{}\n",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    println!("Tools (6):");
+    println!("  record_finding        Record a code finding with dedup");
+    println!("  record_batch          Record multiple findings (partial success)");
+    println!("  query_findings        Search findings with filters");
+    println!("  update_finding_status Transition lifecycle status");
+    println!("  get_finding_context   Get full finding details");
+    println!("  suppress_finding      Suppress with reason and optional expiry");
+
+    println!("\nResources (6):");
+    println!("  findings://summary              Counts by severity/status + recent");
+    println!("  findings://file/{{path}}          All findings in a file");
+    println!("  findings://detail/{{uuid}}        Full finding with history");
+    println!(
+        "  findings://severity/{{level}}     By severity (critical/important/suggestion/tech_debt)"
+    );
+    println!("  findings://status/{{status}}      By lifecycle state (open/resolved/closed/...)");
+    println!("  findings://rule/{{rule_id}}       By rule ID (unsafe-unwrap/sql-injection/...)");
+
+    println!("\nPrompts (5):");
+    println!("  triage-file           Classify priority and suggest fix order for a file");
+    println!("    args: file_path");
+    println!("  fix-finding           Generate a concrete code fix for a finding");
+    println!("    args: finding_id");
+    println!("  summarize-findings    Create a stakeholder-ready report");
+    println!("  review-pr             Write a structured PR review from open findings");
+    println!("  explain-finding       Explain a finding's impact in plain language");
+    println!("    args: finding_id");
+
+    println!("\nConfigure in .mcp.json:");
+    println!("  {{");
+    println!("    \"mcpServers\": {{");
+    println!("      \"tally\": {{");
+    println!("        \"command\": \"tally\",");
+    println!("        \"args\": [\"mcp-server\"]");
+    println!("      }}");
+    println!("    }}");
+    println!("  }}");
+}
+
 /// Handle `tally record-batch`.
 ///
 /// # Errors

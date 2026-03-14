@@ -168,5 +168,9 @@ fn run(cli: Cli) -> tally::error::Result<()> {
             clap_complete::generate(shell, &mut Cli::command(), "tally", &mut std::io::stdout());
             Ok(())
         }
+        Command::McpCapabilities => {
+            handlers::handle_mcp_capabilities();
+            Ok(())
+        }
     }
 }
