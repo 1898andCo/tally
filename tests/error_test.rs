@@ -1,7 +1,7 @@
 //! Tests for error type Display implementations and error messages.
 
-use tally::error::TallyError;
-use tally::model::LifecycleState;
+use tally_ng::error::TallyError;
+use tally_ng::model::LifecycleState;
 
 #[test]
 fn not_found_display() {

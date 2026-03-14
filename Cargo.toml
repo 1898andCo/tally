@@ -1,11 +1,15 @@
 [package]
-name = "tally"
+name = "tally-ng"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
 description = "Git-backed findings tracker for AI coding agents"
 repository = "https://github.com/1898andCo/tally"
+
+[[bin]]
+name = "tally"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"

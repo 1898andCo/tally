@@ -1,6 +1,6 @@
 //! Tests for content fingerprint computation and identity resolution.
 
-use tally::model::*;
+use tally_ng::model::*;
 use uuid::Uuid;
 
 // =============================================================================

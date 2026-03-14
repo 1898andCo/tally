@@ -4,11 +4,11 @@
 //! coverage instrumentation, unlike the subprocess-based `mcp_test.rs`.
 
 use rmcp::handler::server::wrapper::Parameters;
-use tally::mcp::server::{
+use tally_ng::mcp::server::{
     BatchFindingInput, GetContextInput, LocationInput, QueryFindingsInput, RecordBatchInput,
     RecordFindingInput, SuppressFindingInput, TallyMcpServer, UpdateStatusInput,
 };
-use tally::storage::GitFindingsStore;
+use tally_ng::storage::GitFindingsStore;
 
 /// Create a temp git repo and return `(TempDir, TallyMcpServer)`.
 fn setup_mcp() -> (tempfile::TempDir, TallyMcpServer) {
@@ -876,7 +876,7 @@ async fn mcp_unit_resource_summary() {
         .expect("record");
 
     let store = GitFindingsStore::open(repo_path).expect("open");
-    let summary = tally::mcp::server::read_resource_summary(&store).expect("summary");
+    let summary = tally_ng::mcp::server::read_resource_summary(&store).expect("summary");
     let json: serde_json::Value = serde_json::from_str(&summary).expect("parse");
 
     assert_eq!(json["total"], 2);
@@ -892,7 +892,7 @@ async fn mcp_unit_resource_summary_empty() {
     let repo_path = &server.repo_path().to_string();
 
     let store = GitFindingsStore::open(repo_path).expect("open");
-    let summary = tally::mcp::server::read_resource_summary(&store).expect("summary");
+    let summary = tally_ng::mcp::server::read_resource_summary(&store).expect("summary");
     let json: serde_json::Value = serde_json::from_str(&summary).expect("parse");
 
     assert_eq!(json["total"], 0);
@@ -927,7 +927,7 @@ async fn mcp_unit_resource_file() {
     let store = GitFindingsStore::open(repo_path).expect("open");
 
     // Query for main.rs
-    let result = tally::mcp::server::read_resource_file(&store, "src/main.rs").expect("file");
+    let result = tally_ng::mcp::server::read_resource_file(&store, "src/main.rs").expect("file");
     let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
     assert_eq!(findings.len(), 1);
     assert!(
@@ -939,7 +939,7 @@ async fn mcp_unit_resource_file() {
 
     // Query for nonexistent file
     let result =
-        tally::mcp::server::read_resource_file(&store, "nonexistent.rs").expect("file empty");
+        tally_ng::mcp::server::read_resource_file(&store, "nonexistent.rs").expect("file empty");
     let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
     assert_eq!(findings.len(), 0, "nonexistent file should return empty");
 }
@@ -965,7 +965,7 @@ async fn mcp_unit_resource_detail() {
         .to_string();
 
     let store = GitFindingsStore::open(repo_path).expect("open");
-    let result = tally::mcp::server::read_resource_detail(&store, &uuid).expect("detail");
+    let result = tally_ng::mcp::server::read_resource_detail(&store, &uuid).expect("detail");
     let json: serde_json::Value = serde_json::from_str(&result).expect("parse");
     assert_eq!(json["title"], "detailed finding");
     assert_eq!(json["uuid"], uuid);
@@ -978,7 +978,7 @@ async fn mcp_unit_resource_detail_not_found() {
 
     let store = GitFindingsStore::open(repo_path).expect("open");
     let err =
-        tally::mcp::server::read_resource_detail(&store, "00000000-0000-0000-0000-000000000000");
+        tally_ng::mcp::server::read_resource_detail(&store, "00000000-0000-0000-0000-000000000000");
     assert!(err.is_err(), "nonexistent UUID should error");
 }
 
@@ -1011,18 +1011,18 @@ async fn mcp_unit_resource_by_severity() {
     let store = GitFindingsStore::open(&repo_path).expect("open");
 
     let result =
-        tally::mcp::server::read_resource_by_severity(&store, "critical").expect("severity");
+        tally_ng::mcp::server::read_resource_by_severity(&store, "critical").expect("severity");
     let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
     assert_eq!(findings.len(), 1);
     assert!(findings[0]["title"].as_str().expect("t").contains("crit"));
 
     let result =
-        tally::mcp::server::read_resource_by_severity(&store, "suggestion").expect("severity");
+        tally_ng::mcp::server::read_resource_by_severity(&store, "suggestion").expect("severity");
     let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
     assert_eq!(findings.len(), 1);
 
     let result =
-        tally::mcp::server::read_resource_by_severity(&store, "invalid").expect("severity");
+        tally_ng::mcp::server::read_resource_by_severity(&store, "invalid").expect("severity");
     let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
     assert_eq!(findings.len(), 0, "invalid severity returns empty");
 }
@@ -1057,11 +1057,11 @@ async fn mcp_unit_resource_by_status() {
     let store = GitFindingsStore::open(&repo_path).expect("open");
 
     let result =
-        tally::mcp::server::read_resource_by_status(&store, "in_progress").expect("status");
+        tally_ng::mcp::server::read_resource_by_status(&store, "in_progress").expect("status");
     let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
     assert_eq!(findings.len(), 1);
 
-    let result = tally::mcp::server::read_resource_by_status(&store, "open").expect("status");
+    let result = tally_ng::mcp::server::read_resource_by_status(&store, "open").expect("status");
     let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
     assert_eq!(findings.len(), 0, "no open findings after update");
 }
@@ -1094,13 +1094,13 @@ async fn mcp_unit_resource_by_rule() {
 
     let store = GitFindingsStore::open(&repo_path).expect("open");
 
-    let result = tally::mcp::server::read_resource_by_rule(&store, "sql-injection").expect("rule");
+    let result = tally_ng::mcp::server::read_resource_by_rule(&store, "sql-injection").expect("rule");
     let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
     assert_eq!(findings.len(), 1);
     assert!(findings[0]["title"].as_str().expect("t").contains("sql"));
 
     let result =
-        tally::mcp::server::read_resource_by_rule(&store, "nonexistent-rule").expect("rule");
+        tally_ng::mcp::server::read_resource_by_rule(&store, "nonexistent-rule").expect("rule");
     let findings: Vec<serde_json::Value> = serde_json::from_str(&result).expect("parse");
     assert_eq!(findings.len(), 0);
 }
@@ -1135,7 +1135,7 @@ async fn mcp_unit_prompt_triage_file() {
         .expect("record");
 
     let result = server
-        .triage_file(Parameters(tally::mcp::server::TriageFileArgs {
+        .triage_file(Parameters(tally_ng::mcp::server::TriageFileArgs {
             file_path: "src/main.rs".into(),
         }))
         .await
@@ -1176,7 +1176,7 @@ async fn mcp_unit_prompt_fix_finding() {
         .to_string();
 
     let result = server
-        .fix_finding(Parameters(tally::mcp::server::FixFindingArgs {
+        .fix_finding(Parameters(tally_ng::mcp::server::FixFindingArgs {
             finding_id: uuid,
         }))
         .await
@@ -1256,7 +1256,7 @@ async fn mcp_unit_prompt_explain_finding() {
         .to_string();
 
     let result = server
-        .explain_finding(Parameters(tally::mcp::server::ExplainFindingArgs {
+        .explain_finding(Parameters(tally_ng::mcp::server::ExplainFindingArgs {
             finding_id: uuid,
         }))
         .await

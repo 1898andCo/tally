@@ -5,8 +5,8 @@
 
 use chrono::Utc;
 use git2::{BranchType, FileMode, Repository};
-use tally::model::*;
-use tally::storage::GitFindingsStore;
+use tally_ng::model::*;
+use tally_ng::storage::GitFindingsStore;
 use uuid::Uuid;
 
 /// Create a temp repo with an initial commit on `main` so HEAD is not unborn.
@@ -475,17 +475,17 @@ fn save_finding_with_all_optional_fields() {
     finding.suggested_fix = Some("Use the ? operator instead of unwrap()".to_string());
     finding.evidence = Some("line 42: let x = foo.unwrap();".to_string());
     finding.tags = vec!["safety".to_string(), "error-handling".to_string()];
-    finding.relationships = vec![tally::model::FindingRelationship {
+    finding.relationships = vec![tally_ng::model::FindingRelationship {
         related_finding_id: Uuid::now_v7(),
-        relationship_type: tally::model::RelationshipType::RelatedTo,
+        relationship_type: tally_ng::model::RelationshipType::RelatedTo,
         reason: Some("Same pattern".to_string()),
         created_at: Utc::now(),
     }];
-    finding.suppression = Some(tally::model::Suppression {
+    finding.suppression = Some(tally_ng::model::Suppression {
         suppressed_at: Utc::now(),
         reason: "Known issue".to_string(),
         expires_at: None,
-        suppression_type: tally::model::SuppressionType::Global,
+        suppression_type: tally_ng::model::SuppressionType::Global,
     });
 
     store.save_finding(&finding).expect("save");
@@ -503,7 +503,7 @@ fn save_finding_with_all_optional_fields() {
     assert_eq!(loaded.relationships.len(), 1);
     assert_eq!(
         loaded.relationships[0].relationship_type,
-        tally::model::RelationshipType::RelatedTo
+        tally_ng::model::RelationshipType::RelatedTo
     );
     assert!(loaded.suppression.is_some());
     assert_eq!(

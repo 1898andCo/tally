@@ -1,7 +1,7 @@
 //! Tests for session-scoped short ID mapping (Task 6).
 
-use tally::model::Severity;
-use tally::session::SessionIdMapper;
+use tally_ng::model::Severity;
+use tally_ng::session::SessionIdMapper;
 use uuid::Uuid;
 
 // --- Positive tests ---

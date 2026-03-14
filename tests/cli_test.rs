@@ -1107,7 +1107,7 @@ fn cli_all_relationship_types_parse() {
         "discovered_while_fixing",
         "supersedes",
     ] {
-        let result: Result<tally::model::RelationshipType, _> = rel_type.parse();
+        let result: Result<tally_ng::model::RelationshipType, _> = rel_type.parse();
         assert!(result.is_ok(), "should parse relationship type: {rel_type}");
     }
 }

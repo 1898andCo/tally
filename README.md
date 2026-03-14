@@ -23,13 +23,13 @@ Provides persistent, content-addressable finding identity across sessions, agent
 ### From crates.io
 
 ```bash
-cargo install tally
+cargo install tally-ng
 ```
 
 ### With cargo-binstall (prebuilt binaries)
 
 ```bash
-cargo binstall tally
+cargo binstall tally-ng
 ```
 
 ### With Homebrew (macOS/Linux)

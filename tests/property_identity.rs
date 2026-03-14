@@ -1,7 +1,7 @@
 //! Property-based tests for identity and model types.
 
 use proptest::prelude::*;
-use tally::model::*;
+use tally_ng::model::*;
 
 // =============================================================================
 // Fingerprint property tests

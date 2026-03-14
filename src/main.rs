@@ -3,9 +3,9 @@
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser};
-use tally::cli::handlers;
-use tally::cli::{Cli, Command};
-use tally::storage::GitFindingsStore;
+use tally_ng::cli::handlers;
+use tally_ng::cli::{Cli, Command};
+use tally_ng::storage::GitFindingsStore;
 
 fn init_tracing(verbose: u8, quiet: u8) {
     use tracing_subscriber::EnvFilter;
@@ -51,20 +51,20 @@ fn main() -> ExitCode {
         Err(e) => {
             eprintln!("error: {e}");
             match e {
-                tally::error::TallyError::Git(_)
-                | tally::error::TallyError::BranchNotFound { .. } => ExitCode::from(2),
+                tally_ng::error::TallyError::Git(_)
+                | tally_ng::error::TallyError::BranchNotFound { .. } => ExitCode::from(2),
                 _ => ExitCode::from(1),
             }
         }
     }
 }
 
-fn store() -> tally::error::Result<GitFindingsStore> {
+fn store() -> tally_ng::error::Result<GitFindingsStore> {
     GitFindingsStore::open(".")
 }
 
 #[allow(clippy::too_many_lines)] // dispatch function maps 1:1 with CLI subcommands
-fn run(cli: Cli) -> tally::error::Result<()> {
+fn run(cli: Cli) -> tally_ng::error::Result<()> {
     match cli.command {
         Command::Init => handlers::handle_init(&store()?),
         Command::Record {
@@ -170,9 +170,9 @@ fn run(cli: Cli) -> tally::error::Result<()> {
         Command::Import { path } => handlers::handle_import(&store()?, &path),
         Command::Stats => handlers::handle_stats(&store()?),
         Command::McpServer => {
-            let rt = tokio::runtime::Runtime::new().map_err(tally::error::TallyError::Io)?;
-            rt.block_on(tally::mcp::server::run_mcp_server("."))
-                .map_err(|e| tally::error::TallyError::Io(std::io::Error::other(e.to_string())))
+            let rt = tokio::runtime::Runtime::new().map_err(tally_ng::error::TallyError::Io)?;
+            rt.block_on(tally_ng::mcp::server::run_mcp_server("."))
+                .map_err(|e| tally_ng::error::TallyError::Io(std::io::Error::other(e.to_string())))
         }
         Command::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "tally", &mut std::io::stdout());

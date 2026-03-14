@@ -1,6 +1,6 @@
 //! Tests for the tally data model: state machine, finding types, serialization.
 
-use tally::model::*;
+use tally_ng::model::*;
 
 // =============================================================================
 // Task 2.6: All 24 valid state transitions (positive)
