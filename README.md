@@ -11,7 +11,7 @@ Provides persistent, content-addressable finding identity across sessions, agent
 - **Multi-agent**: Cross-agent deduplication via fingerprint matching, session-scoped short IDs (C1, I2, S3, TD4)
 - **Git-backed**: One-file-per-finding on an orphan branch, zero merge conflicts for concurrent writes
 - **Dual interface**: CLI for scripts/CI + MCP server for Claude Code, Cursor, Windsurf
-- **MCP server**: 11 tools, 6 resource templates, 5 prompt templates with rich descriptions for AI agents
+- **MCP server**: 11 tools, 7 resource templates, 5 prompt templates with rich descriptions for AI agents
 - **Export**: SARIF 2.1.0 (GitHub Code Scanning), CSV, JSON
 - **Import**: dclaude and zclaude state file migration
 - **Schema evolution**: Versioned findings with forward-compatible deserialization
@@ -221,16 +221,17 @@ Configure in `.mcp.json` for Claude Code:
 | `rebuild_index` | Rebuild index.json from finding files |
 | `import_findings` | Import from dclaude/zclaude state files |
 
-### Resources (6)
+### Resources (7)
 
 | URI | Description |
 |-----|-------------|
 | `findings://summary` | Counts by severity/status, 10 most recent |
 | `findings://file/{path}` | All findings in a specific file |
-| `findings://detail/{uuid}` | Full finding with history |
+| `findings://detail/{uuid}` | Full finding with history, relationships, tags, PR context |
 | `findings://severity/{level}` | All findings at a severity level |
 | `findings://status/{state}` | All findings in a lifecycle state |
 | `findings://rule/{rule_id}` | All findings matching a rule ID |
+| `findings://pr/{pr_number}` | All findings from a specific PR |
 
 ### Prompts (5)
 
