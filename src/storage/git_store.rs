@@ -29,9 +29,10 @@ const FINDINGS_DIR: &str = "findings";
 const MAX_LOCK_RETRIES: u32 = 3;
 
 /// Build `RemoteCallbacks` with a credential chain:
-/// 1. git credential helper (`~/.gitconfig` — osxkeychain, `gh auth setup-git`, etc.)
+/// 1. git credential helper (`~/.gitconfig` — osxkeychain/manager/store, `gh auth setup-git`)
 /// 2. `GITHUB_TOKEN` / `GIT_TOKEN` environment variable
-/// 3. SSH agent
+/// 3. SSH agent (Unix `ssh-agent`, Windows OpenSSH agent)
+/// 4. SSH key from default paths (`~/.ssh/id_ed25519`, `~/.ssh/id_rsa`)
 ///
 /// Tracks attempt count to avoid libgit2's infinite retry loop.
 fn build_remote_callbacks() -> git2::RemoteCallbacks<'static> {
@@ -39,7 +40,7 @@ fn build_remote_callbacks() -> git2::RemoteCallbacks<'static> {
     let mut callbacks = git2::RemoteCallbacks::new();
     callbacks.credentials(move |url, username_from_url, allowed_types| {
         let attempt = attempts.get();
-        if attempt >= 3 {
+        if attempt >= 4 {
             return Err(git2::Error::from_str(
                 "Authentication failed: exhausted all credential strategies",
             ));
@@ -48,7 +49,8 @@ fn build_remote_callbacks() -> git2::RemoteCallbacks<'static> {
 
         let username = username_from_url.unwrap_or("git");
 
-        // Strategy 1: git credential helper
+        // Strategy 1: git credential helper (works cross-platform:
+        // macOS osxkeychain, Windows GCM, Linux store/cache, gh auth setup-git)
         if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
             if let Ok(config) = git2::Config::open_default() {
                 if let Ok(cred) = git2::Cred::credential_helper(&config, url, username_from_url) {
@@ -56,16 +58,38 @@ fn build_remote_callbacks() -> git2::RemoteCallbacks<'static> {
                 }
             }
 
-            // Strategy 2: environment variable
+            // Strategy 2: environment variable (CI/Actions, headless)
             if let Ok(token) = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GIT_TOKEN"))
             {
                 return git2::Cred::userpass_plaintext("git", &token);
             }
         }
 
-        // Strategy 3: SSH agent
+        // Strategy 3: SSH agent (Unix ssh-agent, Windows OpenSSH agent via SSH_AUTH_SOCK)
         if allowed_types.contains(git2::CredentialType::SSH_KEY) {
-            return git2::Cred::ssh_key_from_agent(username);
+            if let Ok(cred) = git2::Cred::ssh_key_from_agent(username) {
+                return Ok(cred);
+            }
+
+            // Strategy 4: SSH key from default file paths (no agent needed)
+            if let Some(home) = home::home_dir() {
+                let ssh_dir = home.join(".ssh");
+                for key_name in &["id_ed25519", "id_rsa", "id_ecdsa"] {
+                    let privkey = ssh_dir.join(key_name);
+                    if privkey.exists() {
+                        let pubkey = ssh_dir.join(format!("{key_name}.pub"));
+                        let pubkey_ref = if pubkey.exists() {
+                            Some(pubkey.as_path())
+                        } else {
+                            None
+                        };
+                        if let Ok(cred) = git2::Cred::ssh_key(username, pubkey_ref, &privkey, None)
+                        {
+                            return Ok(cred);
+                        }
+                    }
+                }
+            }
         }
 
         Err(git2::Error::from_str("No suitable credentials found"))
@@ -87,17 +111,25 @@ fn build_push_options() -> git2::PushOptions<'static> {
     opts
 }
 
-/// Wrap auth errors with actionable guidance.
+/// Wrap auth errors with actionable, platform-specific guidance.
 fn wrap_auth_error(e: git2::Error, remote_name: &str) -> TallyError {
     if e.code() == git2::ErrorCode::Auth
         || e.message().contains("authentication")
         || e.message().contains("credential")
     {
+        let helper_hint = if cfg!(target_os = "macos") {
+            "git config --global credential.helper osxkeychain"
+        } else if cfg!(target_os = "windows") {
+            "git config --global credential.helper manager"
+        } else {
+            "git config --global credential.helper store"
+        };
         TallyError::Git(git2::Error::from_str(&format!(
             "Authentication failed for remote '{remote_name}'. Configure credentials with one of:\n  \
-             - gh auth setup-git\n  \
-             - git config --global credential.helper osxkeychain\n  \
-             - Set GITHUB_TOKEN environment variable"
+             - gh auth setup-git  (recommended)\n  \
+             - {helper_hint}\n  \
+             - Set GITHUB_TOKEN environment variable\n  \
+             - Add SSH key to ~/.ssh/ (id_ed25519 or id_rsa)"
         )))
     } else {
         TallyError::Git(e)
