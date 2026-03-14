@@ -1213,9 +1213,9 @@ pub async fn run_mcp_server(repo_path: &str) -> anyhow::Result<()> {
     let server = TallyMcpServer::new(repo_path.to_string());
     let transport = rmcp::transport::io::stdio();
 
-    eprintln!("tally MCP server starting on stdio...");
+    tracing::info!("MCP server starting on stdio");
     let service = server.serve(transport).await?;
-    eprintln!("tally MCP server connected.");
+    tracing::info!("MCP server connected");
 
     service.waiting().await?;
     Ok(())

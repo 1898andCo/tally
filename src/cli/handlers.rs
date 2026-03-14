@@ -22,7 +22,7 @@ use super::OutputFormat;
 /// Returns error if branch creation fails.
 pub fn handle_init(store: &GitFindingsStore) -> Result<()> {
     store.init()?;
-    eprintln!("Initialized findings-data branch.");
+    tracing::info!("Initialized findings-data branch");
     Ok(())
 }
 
@@ -241,7 +241,7 @@ pub fn handle_update(store: &GitFindingsStore, args: &UpdateArgs<'_>) -> Result<
 /// Returns error if storage fails.
 pub fn handle_rebuild_index(store: &GitFindingsStore) -> Result<()> {
     store.rebuild_index()?;
-    eprintln!("Index rebuilt.");
+    tracing::info!("Index rebuilt");
     Ok(())
 }
 
@@ -490,7 +490,7 @@ pub fn handle_export(
     match output_path {
         Some(path) => {
             std::fs::write(path, &content).map_err(TallyError::Io)?;
-            eprintln!("Exported {} findings to {path}", findings.len());
+            tracing::info!(count = findings.len(), path, "Exported findings");
         }
         None => println!("{content}"),
     }
@@ -543,7 +543,7 @@ pub fn handle_import(store: &GitFindingsStore, path: &str) -> Result<()> {
         });
 
     let Some(findings) = findings_arr else {
-        eprintln!("No findings found in state file. Expected dclaude or zclaude format.");
+        tracing::warn!("No findings found in state file, expected dclaude or zclaude format");
         return Ok(());
     };
 
@@ -560,7 +560,7 @@ pub fn handle_import(store: &GitFindingsStore, path: &str) -> Result<()> {
         }
     }
 
-    eprintln!("Import complete: {imported} imported, {skipped} skipped");
+    tracing::info!(imported, skipped, "Import complete");
     Ok(())
 }
 

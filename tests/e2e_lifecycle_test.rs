@@ -617,10 +617,12 @@ fn e2e_import_triage_export() {
     // Import
     tally()
         .args(["import", state.to_str().expect("p")])
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(dir)
         .assert()
         .success()
-        .stderr(predicate::str::contains("4 imported"));
+        .stderr(predicate::str::contains("imported=4"));
 
     // Verify imported findings
     let findings = run_query_json(dir, &[]);

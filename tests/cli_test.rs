@@ -79,6 +79,8 @@ fn cli_init_succeeds() {
     let tmp = setup_cli_repo();
     tally()
         .arg("init")
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
@@ -722,10 +724,12 @@ fn cli_import_dclaude_format() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("2 imported"));
+        .stderr(predicate::str::contains("imported=2"));
 
     // Verify findings were imported
     tally()
@@ -763,10 +767,12 @@ fn cli_import_zclaude_format() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("1 imported"));
+        .stderr(predicate::str::contains("imported=1"));
 }
 
 #[test]
@@ -783,6 +789,8 @@ fn cli_import_empty_file_no_error() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "warn")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
@@ -1793,6 +1801,8 @@ fn cli_rebuild_index() {
 
     tally()
         .arg("rebuild-index")
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
@@ -2808,10 +2818,12 @@ fn cli_import_severity_inferred_from_id_prefix() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("3 imported"));
+        .stderr(predicate::str::contains("imported=3"));
 
     // Query and verify inferred severities
     let output = tally()
@@ -2867,10 +2879,12 @@ fn cli_import_tolerates_non_object_entries() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("3 imported"));
+        .stderr(predicate::str::contains("imported=3"));
 }
 
 #[test]
@@ -3091,10 +3105,12 @@ fn cli_import_tech_debt_severity() {
 
     tally()
         .args(["import", state_file.to_str().expect("path")])
+        .env("RUST_LOG", "info")
+        .env("NO_COLOR", "1")
         .current_dir(tmp.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("1 imported"));
+        .stderr(predicate::str::contains("imported=1"));
 
     // Verify severity is tech_debt
     let output = tally()

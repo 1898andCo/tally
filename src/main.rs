@@ -7,34 +7,23 @@ use tally::cli::handlers;
 use tally::cli::{Cli, Command};
 use tally::storage::GitFindingsStore;
 
-fn init_tracing(mcp_mode: bool) {
+fn init_tracing() {
     use tracing_subscriber::EnvFilter;
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
 
-    if mcp_mode {
-        // MCP mode: log to stderr only, never stdout (stdout is JSON-RPC)
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_writer(std::io::stderr)
-            .with_target(false)
-            .compact()
-            .init();
-    } else {
-        // CLI mode: log to stderr
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_writer(std::io::stderr)
-            .with_target(false)
-            .compact()
-            .init();
-    }
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .compact()
+        .init();
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    init_tracing(matches!(cli.command, Command::McpServer));
+    init_tracing();
 
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
