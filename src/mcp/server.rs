@@ -334,7 +334,7 @@ impl TallyMcpServer {
 #[tool_router]
 impl TallyMcpServer {
     #[tool(
-        description = "Record a code finding with stable identity. If the same file+line+rule was already recorded, returns the existing UUID (dedup). If a similar finding exists nearby (within 5 lines, same rule), creates a new finding linked as related. Returns JSON with status (created/deduplicated), uuid, and optional related_to/distance."
+        description = "Record a code finding with stable identity. Deduplication: if the same file+line+rule was already recorded, returns the existing UUID. If a similar finding exists nearby (within 5 lines, same rule), creates a new finding linked as related. Returns JSON with status (created/deduplicated), uuid, and optional related_to/distance. Supports optional category, tags, pr_number, session_id for rich metadata, and related_to/relationship_type for cross-finding links."
     )]
     pub async fn record_finding(
         &self,
@@ -510,7 +510,7 @@ impl TallyMcpServer {
     }
 
     #[tool(
-        description = "Transition a finding's lifecycle status. Valid transitions: Open→acknowledged/in_progress/false_positive/deferred/suppressed, Acknowledged→in_progress/false_positive/wont_fix/deferred, InProgress→resolved/wont_fix/deferred, Resolved→reopened/closed, Reopened→acknowledged/in_progress. Closed is terminal. Invalid transitions return an error listing valid targets."
+        description = "Transition a finding's lifecycle status. Full state machine: Open→acknowledged/in_progress/false_positive/deferred/suppressed, Acknowledged→in_progress/false_positive/wont_fix/deferred, InProgress→resolved/wont_fix/deferred, Resolved→reopened/closed, FalsePositive→reopened/closed, WontFix→reopened/closed, Deferred→open/closed, Suppressed→open/closed, Reopened→acknowledged/in_progress, Closed→(terminal). Supports optional commit_sha (for fix traceability) and related_to/relationship (to link findings). Invalid transitions return an error listing valid targets."
     )]
     pub async fn update_finding_status(
         &self,
@@ -610,7 +610,7 @@ impl TallyMcpServer {
     }
 
     #[tool(
-        description = "Record multiple findings at once. Uses partial success semantics — valid findings are recorded even if others fail. Returns JSON with total/succeeded/failed counts and per-item results. Duplicates are automatically deduplicated (not counted as failures)."
+        description = "Record multiple findings at once. Uses partial success semantics — valid findings are recorded even if others fail. Returns JSON with total/succeeded/failed counts and per-item results. Duplicates are automatically deduplicated (not counted as failures). Batch-level agent, pr_number, and session_id apply to all findings unless overridden per finding. Each finding supports category, tags, pr_number, session_id."
     )]
     pub async fn record_batch(
         &self,
@@ -658,7 +658,7 @@ impl TallyMcpServer {
     }
 
     #[tool(
-        description = "Suppress a finding so it won't be re-reported. Optionally set an expiry date — after expiry, the finding auto-reopens on next query. Only works from Open status. Returns the finding's UUID and suppression status."
+        description = "Suppress a finding so it won't be re-reported. Only valid from Open status (use update_finding_status first if needed). Optionally set an expiry date — after expiry, the finding auto-reopens on next query. Supports suppression_type: global (everywhere), file (this file only), inline (specific code pattern). Returns the finding's UUID and suppression status."
     )]
     pub async fn suppress_finding(
         &self,
@@ -1040,9 +1040,11 @@ impl TallyMcpServer {
                 "Here are all the findings for `{}`:\n\n```json\n{findings_json}\n```\n\n\
                  Please triage these findings:\n\
                  1. Classify each by priority (fix now, fix soon, defer, ignore)\n\
-                 2. Assess the impact of each finding\n\
+                 2. Assess the impact of each finding — consider the category, severity, and any relationships to other findings\n\
                  3. Suggest an optimal fix order (dependencies, quick wins first)\n\
-                 4. For each \"fix now\" finding, provide a brief remediation approach",
+                 4. For each \"fix now\" finding, use the suggested_fix if available, otherwise provide a remediation approach\n\
+                 5. Note which agent discovered each finding (discovered_by field) and any PR context (pr_number field)\n\
+                 6. Group by category if findings span multiple categories",
                 args.file_path
             ),
         )])
@@ -1067,9 +1069,12 @@ impl TallyMcpServer {
                  ```json\n{finding_json}\n```\n\n\
                  Please:\n\
                  1. Explain what the issue is and why it matters\n\
-                 2. Show the exact code change needed to fix it\n\
-                 3. Explain any edge cases or risks with the fix\n\
-                 4. Suggest a test to verify the fix"
+                 2. If the finding has a suggested_fix field, evaluate it and refine if needed; otherwise propose a fix\n\
+                 3. Show the exact code change needed (with before/after)\n\
+                 4. Use the evidence field to understand the current code state\n\
+                 5. Check the relationships field — if this finding is linked to others, consider them in the fix\n\
+                 6. Explain any edge cases or risks with the fix\n\
+                 7. Suggest a test to verify the fix"
             ),
         )])
     }
@@ -1092,7 +1097,10 @@ impl TallyMcpServer {
                  1. Executive summary (1-2 sentences on overall code health)\n\
                  2. Breakdown by severity with counts\n\
                  3. Top 3 most critical findings that need immediate attention\n\
-                 4. Recommendations for the team"
+                 4. Trends by category and tags (which areas have the most issues?)\n\
+                 5. PR correlation — if findings have pr_number, note which PRs introduced the most issues\n\
+                 6. Agent provenance — which discovery agents found the most issues\n\
+                 7. Recommendations for the team"
             ),
         )])
     }
@@ -1115,8 +1123,10 @@ impl TallyMcpServer {
                  1. Lists critical and important findings as blocking issues\n\
                  2. Lists suggestions as non-blocking recommendations\n\
                  3. Groups findings by file for easy navigation\n\
-                 4. Uses a professional, constructive tone\n\
-                 5. Formats as a GitHub PR review comment with markdown"
+                 4. For each finding, include the category tag and which agent discovered it (from discovered_by)\n\
+                 5. If findings have relationships, mention them (e.g., 'related to C1', 'discovered while fixing I2')\n\
+                 6. Uses a professional, constructive tone\n\
+                 7. Formats as a GitHub PR review comment with markdown"
             ),
         )])
     }
@@ -1142,8 +1152,10 @@ impl TallyMcpServer {
                  1. What this issue is in plain language\n\
                  2. Why it matters (security, reliability, maintainability)\n\
                  3. What could happen if left unfixed (real-world consequences)\n\
-                 4. How common this type of issue is\n\
-                 5. Whether this is a false positive or a genuine concern"
+                 4. How common this type of issue is (consider the category and rule_id)\n\
+                 5. Whether this is a false positive or a genuine concern\n\
+                 6. If the finding has relationships to other findings, explain the connection\n\
+                 7. Note which agent discovered it and when (from discovered_by and created_at)"
             ),
         )])
     }
@@ -1202,7 +1214,10 @@ impl ServerHandler for TallyMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         let mut resource = RawResource::new("findings://summary", "Findings Summary");
-        resource.description = Some("Counts by severity/status, 10 most recent findings".into());
+        resource.description = Some(
+            "Counts by severity and status, 10 most recent findings with category, tags, and PR context"
+                .into(),
+        );
         resource.mime_type = Some("application/json".into());
 
         Ok(ListResourcesResult {
@@ -1234,7 +1249,7 @@ impl ServerHandler for TallyMcpServer {
                         uri_template: "findings://detail/{uuid}".into(),
                         name: "Finding Detail".into(),
                         title: None,
-                        description: Some("Full finding with history and code context".into()),
+                        description: Some("Full finding with state history, relationships, suppression info, PR number, tags, and agent provenance".into()),
                         mime_type: Some("application/json".into()),
                     },
                     None,
@@ -1278,6 +1293,18 @@ impl ServerHandler for TallyMcpServer {
                     },
                     None,
                 ),
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://pr/{pr_number}".into(),
+                        name: "Findings by PR".into(),
+                        title: None,
+                        description: Some(
+                            "All findings discovered in a specific PR number".into(),
+                        ),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
             ],
         })
     }
@@ -1302,6 +1329,8 @@ impl ServerHandler for TallyMcpServer {
             read_resource_by_status(&store, status)?
         } else if let Some(rule) = uri.strip_prefix("findings://rule/") {
             read_resource_by_rule(&store, rule)?
+        } else if let Some(pr_str) = uri.strip_prefix("findings://pr/") {
+            read_resource_by_pr(&store, pr_str)?
         } else {
             return Err(McpError {
                 code: ErrorCode::INVALID_REQUEST,
@@ -1626,6 +1655,29 @@ pub fn read_resource_by_status(
 pub fn read_resource_by_rule(store: &GitFindingsStore, rule_id: &str) -> Result<String, McpError> {
     let findings = store.load_all().map_err(to_mcp_err)?;
     let matched: Vec<&Finding> = findings.iter().filter(|f| f.rule_id == rule_id).collect();
+    serde_json::to_string_pretty(&matched).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+/// Read findings for a specific PR number.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage or serialization fails, or if `pr_number` is not a valid integer.
+pub fn read_resource_by_pr(store: &GitFindingsStore, pr_str: &str) -> Result<String, McpError> {
+    let pr_number: u64 = pr_str.parse().map_err(|_| McpError {
+        code: ErrorCode::INVALID_REQUEST,
+        message: format!("Invalid PR number: {pr_str}").into(),
+        data: None,
+    })?;
+    let findings = store.load_all().map_err(to_mcp_err)?;
+    let matched: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.pr_number == Some(pr_number))
+        .collect();
     serde_json::to_string_pretty(&matched).map_err(|e| McpError {
         code: ErrorCode(-1),
         message: format!("Serialization error: {e}").into(),

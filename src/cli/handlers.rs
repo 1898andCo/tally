@@ -378,13 +378,14 @@ pub fn handle_mcp_capabilities() {
     }
 
     // Resources — static list (resource templates aren't queryable without RequestContext)
-    println!("\nResources (6):");
+    println!("\nResources (7):");
     println!("  findings://summary              Counts by severity/status + recent");
     println!("  findings://file/{{path}}          All findings in a file");
-    println!("  findings://detail/{{uuid}}        Full finding with history");
+    println!("  findings://detail/{{uuid}}        Full finding with history, relationships, tags");
     println!("  findings://severity/{{level}}     By severity level");
     println!("  findings://status/{{status}}      By lifecycle state");
     println!("  findings://rule/{{rule_id}}       By rule ID");
+    println!("  findings://pr/{{pr_number}}       By PR number");
 
     // Prompts — reflected from the prompt router
     let prompts = server.list_prompts();

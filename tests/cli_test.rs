@@ -73,7 +73,7 @@ fn cli_mcp_capabilities_lists_all() {
         .stdout(predicate::str::contains("review-pr"))
         .stdout(predicate::str::contains("explain-finding"))
         // Resources
-        .stdout(predicate::str::contains("Resources (6)"))
+        .stdout(predicate::str::contains("Resources (7)"))
         .stdout(predicate::str::contains("findings://summary"))
         // Config example
         .stdout(predicate::str::contains("mcp-server"));
