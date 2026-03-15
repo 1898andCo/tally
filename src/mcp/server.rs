@@ -513,6 +513,11 @@ impl TallyMcpServer {
             Some(match_result.similar_rules.clone())
         };
 
+        // Check scope
+        let scope_warning = matcher.get_rule(&canonical_rule_id).and_then(|rule| {
+            crate::registry::check_scope(rule.scope.as_ref(), &rule.id, &input.file_path)
+        });
+
         // Use canonical rule ID for fingerprint
         let fingerprint = compute_fingerprint(&primary_location, &canonical_rule_id);
         let existing = store.load_all().unwrap_or_default();
@@ -564,7 +569,7 @@ impl TallyMcpServer {
                     normalized_by: normalized_by.clone(),
                     similar_rules: similar_rules.clone(),
                     agent_merged: Some(!already_recorded),
-                    scope_warning: None,
+                    scope_warning: scope_warning.clone(),
                 }
             }
             IdentityResolution::RelatedFinding { uuid, distance } => {
@@ -599,7 +604,7 @@ impl TallyMcpServer {
                     normalized_by: normalized_by.clone(),
                     similar_rules: similar_rules.clone(),
                     agent_merged: None,
-                    scope_warning: None,
+                    scope_warning: scope_warning.clone(),
                 }
             }
             IdentityResolution::NewFinding => {
@@ -634,7 +639,7 @@ impl TallyMcpServer {
                     normalized_by: normalized_by.clone(),
                     similar_rules: similar_rules.clone(),
                     agent_merged: None,
-                    scope_warning: None,
+                    scope_warning,
                 }
             }
         };

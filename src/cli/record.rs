@@ -62,8 +62,8 @@ pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<
     }
 
     // Resolve rule ID through the registry matching pipeline
-    let (canonical_rule_id, original_rule_id, match_result) =
-        resolve_rule_id(store, args.rule, args.description)?;
+    let (canonical_rule_id, original_rule_id, match_result, scope_warning) =
+        resolve_rule_id(store, args.rule, args.description, args.file)?;
 
     // Use canonical rule ID for fingerprint
     let fingerprint = compute_fingerprint(&primary_location, &canonical_rule_id);
@@ -96,7 +96,12 @@ pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<
                 "related_to": uuid.to_string(),
                 "distance": distance,
             });
-            add_rule_info_to_output(&mut output, &match_result, original_rule_id.as_deref());
+            add_rule_info_to_output(
+                &mut output,
+                &match_result,
+                original_rule_id.as_deref(),
+                scope_warning.as_deref(),
+            );
             print_json(&output);
         }
         IdentityResolution::NewFinding => {
@@ -116,7 +121,12 @@ pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<
                 "status": "created",
                 "uuid": new_uuid.to_string(),
             });
-            add_rule_info_to_output(&mut output, &match_result, original_rule_id.as_deref());
+            add_rule_info_to_output(
+                &mut output,
+                &match_result,
+                original_rule_id.as_deref(),
+                scope_warning.as_deref(),
+            );
             print_json(&output);
         }
     }
@@ -126,12 +136,18 @@ pub fn handle_record(store: &GitFindingsStore, args: &RecordArgs<'_>) -> Result<
 
 /// Resolve a rule ID through the registry matching pipeline.
 ///
-/// Returns (canonical, original if different, match result).
+/// Returns (canonical, original if different, match result, scope warning).
 fn resolve_rule_id(
     store: &GitFindingsStore,
     input_rule: &str,
     description: &str,
-) -> Result<(String, Option<String>, crate::registry::MatchResult)> {
+    file_path: &str,
+) -> Result<(
+    String,
+    Option<String>,
+    crate::registry::MatchResult,
+    Option<String>,
+)> {
     let rules = RuleStore::load_all_rules(store).unwrap_or_default();
     let matcher = RuleMatcher::new(rules);
 
@@ -163,7 +179,17 @@ fn resolve_rule_id(
     let normalized = normalize_rule_id(input_rule).unwrap_or_else(|_| input_rule.to_string());
     let original = (normalized != match_result.canonical_id).then(|| input_rule.to_string());
 
-    Ok((match_result.canonical_id.clone(), original, match_result))
+    // Check scope if matched rule exists
+    let scope_warning = matcher
+        .get_rule(&match_result.canonical_id)
+        .and_then(|rule| crate::registry::check_scope(rule.scope.as_ref(), &rule.id, file_path));
+
+    Ok((
+        match_result.canonical_id.clone(),
+        original,
+        match_result,
+        scope_warning,
+    ))
 }
 
 /// Add rule registry info to JSON output.
@@ -171,6 +197,7 @@ fn add_rule_info_to_output(
     output: &mut serde_json::Value,
     match_result: &crate::registry::MatchResult,
     original_rule_id: Option<&str>,
+    scope_warning: Option<&str>,
 ) {
     let obj = output.as_object_mut().expect("output should be object");
     obj.insert(
@@ -193,6 +220,12 @@ fn add_rule_info_to_output(
         obj.insert(
             "similar_rules".to_string(),
             serde_json::to_value(&match_result.similar_rules).unwrap_or_default(),
+        );
+    }
+    if let Some(warning) = scope_warning {
+        obj.insert(
+            "scope_warning".to_string(),
+            serde_json::Value::String(warning.to_string()),
         );
     }
 }
