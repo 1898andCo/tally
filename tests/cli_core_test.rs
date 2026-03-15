@@ -26,7 +26,7 @@ fn cli_mcp_capabilities_lists_all() {
         .assert()
         .success()
         // Tools — dynamically reflected
-        .stdout(predicate::str::contains("Tools (15)"))
+        .stdout(predicate::str::contains("Tools (23)"))
         .stdout(predicate::str::contains("record_finding"))
         .stdout(predicate::str::contains("query_findings"))
         .stdout(predicate::str::contains("update_finding_status"))

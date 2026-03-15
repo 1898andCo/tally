@@ -249,6 +249,14 @@ fn mcp_list_tools() {
         "add_note",
         "add_tag",
         "remove_tag",
+        "create_rule",
+        "get_rule",
+        "search_rules",
+        "list_rules",
+        "update_rule",
+        "delete_rule",
+        "add_rule_example",
+        "migrate_rules",
     ];
     for name in &expected {
         assert!(names.contains(name), "missing tool: {name}");

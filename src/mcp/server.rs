@@ -329,6 +329,106 @@ pub struct BatchFindingInput {
     pub session_id: Option<String>,
 }
 
+// --- Rule Registry Input Types ---
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateRuleInput {
+    #[schemars(description = "Rule ID (lowercase alphanumeric with hyphens, 2-64 chars)")]
+    pub rule_id: String,
+    #[schemars(description = "Human-readable name")]
+    pub name: String,
+    #[schemars(description = "Description of what this rule checks")]
+    pub description: String,
+    #[schemars(description = "Domain category (e.g., 'safety', 'security')")]
+    pub category: Option<String>,
+    #[schemars(description = "Suggested severity for findings")]
+    pub severity_hint: Option<String>,
+    #[schemars(description = "Alternative names that map to this rule")]
+    pub aliases: Option<Vec<String>>,
+    #[schemars(description = "CWE identifiers")]
+    pub cwe_ids: Option<Vec<String>>,
+    #[schemars(description = "Tags for searchability")]
+    pub tags: Option<Vec<String>>,
+    #[schemars(description = "Scope include glob patterns")]
+    pub scope_include: Option<Vec<String>>,
+    #[schemars(description = "Scope exclude glob patterns")]
+    pub scope_exclude: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetRuleInput {
+    #[schemars(description = "Rule ID to retrieve")]
+    pub rule_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchRulesInput {
+    #[schemars(description = "Search query text (matched against IDs, aliases, descriptions)")]
+    pub query: String,
+    #[schemars(
+        description = "Search method: 'text' (default) or 'semantic' (requires feature flag)"
+    )]
+    pub method: Option<String>,
+    #[schemars(description = "Max results (default: 10)")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListRulesInput {
+    #[schemars(description = "Filter by category")]
+    pub category: Option<String>,
+    #[schemars(description = "Filter by status (active, deprecated, experimental)")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateRuleInput {
+    #[schemars(description = "Rule ID to update")]
+    pub rule_id: String,
+    #[schemars(description = "New name")]
+    pub name: Option<String>,
+    #[schemars(description = "New description")]
+    pub description: Option<String>,
+    #[schemars(description = "New status (active, deprecated, experimental)")]
+    pub status: Option<String>,
+    #[schemars(description = "Aliases to add")]
+    pub add_aliases: Option<Vec<String>>,
+    #[schemars(description = "Aliases to remove")]
+    pub remove_aliases: Option<Vec<String>>,
+    #[schemars(description = "CWE IDs to add")]
+    pub add_cwe: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteRuleInput {
+    #[schemars(description = "Rule ID to deprecate")]
+    pub rule_id: String,
+    #[schemars(description = "Reason for deprecation")]
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AddRuleExampleInput {
+    #[schemars(description = "Rule ID")]
+    pub rule_id: String,
+    #[schemars(description = "Example type: 'bad' or 'good'")]
+    pub example_type: String,
+    #[schemars(description = "Programming language")]
+    pub language: String,
+    #[schemars(description = "Code snippet")]
+    pub code: String,
+    #[schemars(description = "Explanation of why this is bad/good")]
+    pub explanation: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MigrateRulesInput {
+    #[schemars(
+        description = "Dry run — show what would be migrated without registering. Default: false"
+    )]
+    pub dry_run: Option<bool>,
+}
+
 // --- Output Type ---
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1331,6 +1431,253 @@ impl TallyMcpServer {
             .unwrap_or_default(),
         )]))
     }
+
+    // --- Rule Registry Tools ---
+
+    #[tool(
+        description = "Register a new rule in the rule registry. Rules enable deduplication across agents. See findings://docs/rule-registry for format details."
+    )]
+    pub async fn create_rule(
+        &self,
+        params: Parameters<CreateRuleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+        crate::cli::rule::handle_rule_create(
+            &store,
+            &input.rule_id,
+            &input.name,
+            &input.description,
+            input.category.as_deref(),
+            input.severity_hint.as_deref(),
+            &input.aliases.unwrap_or_default(),
+            &input.cwe_ids.unwrap_or_default(),
+            &input.scope_include.unwrap_or_default(),
+            &input.scope_exclude.unwrap_or_default(),
+            &input.tags.unwrap_or_default(),
+        )
+        .map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "created",
+                "rule_id": input.rule_id,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Retrieve a rule by ID from the rule registry. Returns full rule details including aliases, scope, examples, and finding count."
+    )]
+    pub async fn get_rule(
+        &self,
+        params: Parameters<GetRuleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let store = self.store()?;
+        let rule = crate::registry::store::RuleStore::load_rule(&store, &params.0.rule_id)
+            .map_err(to_mcp_err)?;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&rule).unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Search rules by query text. Matches against rule IDs, aliases, and descriptions using Jaro-Winkler similarity. Returns ranked results with confidence scores."
+    )]
+    pub async fn search_rules(
+        &self,
+        params: Parameters<SearchRulesInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let store = self.store()?;
+        let rules =
+            crate::registry::store::RuleStore::load_all_rules(&store).map_err(to_mcp_err)?;
+        let matcher = crate::registry::RuleMatcher::new(rules.clone());
+
+        let query = &params.0.query;
+        let limit = params.0.limit.unwrap_or(10);
+        let mut results = Vec::new();
+
+        // Exact/alias check first
+        if let Some(rule) = matcher.get_rule(query) {
+            results.push(serde_json::json!({
+                "id": rule.id,
+                "name": rule.name,
+                "description": rule.description,
+                "confidence": 1.0,
+                "method": "exact",
+                "category": rule.category,
+                "status": rule.status,
+                "finding_count": rule.finding_count,
+                "aliases": rule.aliases,
+            }));
+        }
+
+        let query_lower = query.to_ascii_lowercase();
+        for rule in &rules {
+            if results.iter().any(|r| r["id"] == rule.id) {
+                continue;
+            }
+            let score = strsim::jaro_winkler(&query_lower, &rule.id);
+            let alias_score = rule
+                .aliases
+                .iter()
+                .map(|a| strsim::jaro_winkler(&query_lower, a))
+                .fold(0.0_f64, f64::max);
+            let best = score.max(alias_score);
+            if best >= 0.3 {
+                results.push(serde_json::json!({
+                    "id": rule.id,
+                    "name": rule.name,
+                    "description": rule.description,
+                    "confidence": best,
+                    "method": if alias_score > score { "alias_match" } else { "jaro_winkler" },
+                    "category": rule.category,
+                    "status": rule.status,
+                    "finding_count": rule.finding_count,
+                    "aliases": rule.aliases,
+                }));
+            }
+        }
+
+        results.sort_by(|a, b| {
+            b["confidence"]
+                .as_f64()
+                .unwrap_or(0.0)
+                .partial_cmp(&a["confidence"].as_f64().unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit);
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&results).unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(description = "List all rules in the registry with optional category/status filters.")]
+    pub async fn list_rules(
+        &self,
+        params: Parameters<ListRulesInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let store = self.store()?;
+        let mut rules =
+            crate::registry::store::RuleStore::load_all_rules(&store).map_err(to_mcp_err)?;
+
+        if let Some(ref cat) = params.0.category {
+            rules.retain(|r| r.category == *cat);
+        }
+        if let Some(ref st) = params.0.status {
+            let target: crate::registry::RuleStatus = st
+                .parse()
+                .map_err(|e: String| to_mcp_err(crate::error::TallyError::InvalidInput(e)))?;
+            rules.retain(|r| r.status == target);
+        }
+
+        rules.sort_by(|a, b| a.id.cmp(&b.id));
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&rules).unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Update mutable fields on a rule (name, description, status, aliases, CWE IDs)."
+    )]
+    pub async fn update_rule(
+        &self,
+        params: Parameters<UpdateRuleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+        crate::cli::rule::handle_rule_update(
+            &store,
+            &input.rule_id,
+            input.name.as_deref(),
+            input.description.as_deref(),
+            input.status.as_deref(),
+            &input.add_aliases.unwrap_or_default(),
+            &input.remove_aliases.unwrap_or_default(),
+            &input.add_cwe.unwrap_or_default(),
+            &[], // scope_include
+            &[], // scope_exclude
+        )
+        .map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "updated",
+                "rule_id": input.rule_id,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Deprecate a rule (set status to deprecated). Deprecated rules still resolve in the matching pipeline — new findings warn that the rule is deprecated but are still recorded."
+    )]
+    pub async fn delete_rule(
+        &self,
+        params: Parameters<DeleteRuleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let store = self.store()?;
+        crate::cli::rule::handle_rule_delete(&store, &params.0.rule_id, &params.0.reason)
+            .map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "deprecated",
+                "rule_id": params.0.rule_id,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Add a code example (bad/good pattern) to a rule. Examples help agents understand what the rule checks."
+    )]
+    pub async fn add_rule_example(
+        &self,
+        params: Parameters<AddRuleExampleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+        crate::cli::rule::handle_rule_add_example(
+            &store,
+            &input.rule_id,
+            &input.example_type,
+            &input.language,
+            &input.code,
+            &input.explanation,
+        )
+        .map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "example_added",
+                "rule_id": input.rule_id,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Migrate existing findings into the rule registry. Scans all findings, extracts unique rule IDs, and auto-registers each as an experimental rule. Idempotent — second run registers 0 new rules."
+    )]
+    pub async fn migrate_rules(
+        &self,
+        params: Parameters<MigrateRulesInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let _dry_run = params.0.dry_run.unwrap_or(false);
+        let store = self.store()?;
+        crate::cli::rule::handle_rule_migrate(&store).map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "migrated",
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
 }
 
 /// Import a single finding from dclaude/zclaude JSON format (MCP helper).
@@ -1675,11 +2022,20 @@ impl ServerHandler for TallyMcpServer {
         );
         tallyql_doc.mime_type = Some("text/markdown".into());
 
+        let mut rule_registry_doc =
+            RawResource::new("findings://docs/rule-registry", "Rule Registry Reference");
+        rule_registry_doc.description = Some(
+            "Rule registry format, matching pipeline, CLI usage, and MCP tool reference. Read this before creating or searching rules."
+                .into(),
+        );
+        rule_registry_doc.mime_type = Some("text/markdown".into());
+
         Ok(ListResourcesResult {
             next_cursor: None,
             resources: vec![
                 Annotated::new(resource, None),
                 Annotated::new(tallyql_doc, None),
+                Annotated::new(rule_registry_doc, None),
             ],
         })
     }
@@ -1777,6 +2133,8 @@ impl ServerHandler for TallyMcpServer {
 
         let content = if uri == "findings://docs/tallyql-syntax" {
             include_str!("../../docs/reference/tallyql-syntax.md").to_string()
+        } else if uri == "findings://docs/rule-registry" {
+            include_str!("../../docs/reference/rule-registry.md").to_string()
         } else if uri == "findings://summary" {
             read_resource_summary(&store)?
         } else if let Some(path) = uri.strip_prefix("findings://file/") {
