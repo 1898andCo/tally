@@ -56,8 +56,8 @@ cargo install tally-ng
 # With cargo-binstall
 cargo binstall tally-ng
 
-# With Homebrew
-brew upgrade tally
+# With Homebrew (update tap first to fetch latest formula)
+brew update && brew upgrade tally
 ```
 
 **v0.4.0 → v0.5.0 migration:** No action required. Existing findings on the `findings-data` branch are fully compatible — tally v0.5.0 reads v0.4.0 finding JSON files without migration. New fields (`notes`, `edit_history`) default to empty arrays via `#[serde(default)]`.
