@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1] - 2026-03-15
+
+### Bug Fixes
+
+- *(ci)* Use HOMEBREW_TAP_TOKEN for sync-main and fix merge ref
+- *(ci)* Add livecheck block to Homebrew formula template
+- *(ci)* Add Homebrew livecheck and fix cargo +nightly compatibility
+
+### Documentation
+
+- Add story for renaming HOMEBREW_TAP_TOKEN to RELEASE_PAT
+
 ## [0.5.0] - 2026-03-14
 
 ### Bug Fixes
