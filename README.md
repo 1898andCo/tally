@@ -303,7 +303,36 @@ tally rule reindex --embeddings
 
 ### Semantic Search (Optional)
 
-Build with `cargo install tally-ng --features semantic-search` to enable local embedding-based search using `all-MiniLM-L6-v2` (384-dim). Set `TALLY_MODEL_CACHE` to customize the model cache directory.
+Semantic search uses local embeddings (`all-MiniLM-L6-v2`, 384-dim) for natural language rule discovery. Install the semantic-enabled binary:
+
+```bash
+# From Homebrew
+brew tap 1898andCo/tap
+brew install tally-semantic
+
+# From crates.io (builds from source)
+cargo install tally-ng --features semantic-search
+
+# From GitHub Release (prebuilt, Linux/macOS only)
+# Download tally-semantic-vX.Y.Z-<target>.tar.gz from the release page
+```
+
+The first semantic search downloads the model (~90MB) to `~/.cache/tally/models/`. Set `TALLY_MODEL_CACHE` to customize the cache directory.
+
+For MCP server usage with semantic search, point `.mcp.json` at the semantic binary:
+
+```json
+{
+  "mcpServers": {
+    "tally": {
+      "command": "tally",
+      "args": ["mcp-server"]
+    }
+  }
+}
+```
+
+If installed via `brew install tally-semantic`, the binary is still named `tally` — it replaces the standard version.
 
 ## MCP Server
 
