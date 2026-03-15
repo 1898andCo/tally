@@ -44,7 +44,7 @@ check: check-fmt check-clippy check-deny
 
 [group('check')]
 check-fmt: _require-nightly
-    cargo +nightly fmt --all -- --check
+    rustup run nightly cargo fmt --all -- --check
 
 [group('check')]
 check-clippy:
@@ -67,7 +67,7 @@ lint: check
 
 [group('format')]
 fmt: _require-nightly
-    cargo +nightly fmt --all
+    rustup run nightly cargo fmt --all
 
 [group('format')]
 fmt-toml: (_require "taplo" "cargo install taplo-cli --locked")
