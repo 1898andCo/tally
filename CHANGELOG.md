@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-03-15
+
+### Bug Fixes
+
+- *(build)* Fix cargo-llvm-cov path detection for Homebrew Rust
+- *(build)* Allow permissive licenses from fastembed transitive deps
+
+### Documentation
+
+- *(config)* Add comment explaining typos allowlist entry
+- *(release)* Update docs for v0.7.0, add rule registry section
+- *(specs)* Update story 1.2 with deviation and completion record
+
+### Features
+
+- *(registry)* Add rule data model, storage, and upsert_file fix
+- *(registry)* Integrate matcher into record flow, fix MCP dedup
+- *(registry)* Add scope enforcement with glob matching
+- *(cli)* Add tally rule subcommands
+- *(mcp)* Add 8 rule registry tools and docs resource
+- *(registry)* Add migration, init upgrade, and rebuild-index rules
+- *(sync)* Add rule conflict resolution via semantic merge
+- *(registry)* Add semantic search via fastembed (feature-gated)
+- *(mcp)* Add 5 resources, batch tool, 3 prompts, enhance 4 prompts
+
+### Refactor
+
+- *(query)* Replace hand-rolled levenshtein with strsim
+
+### Testing
+
+- *(registry)* Add comprehensive tests for rule registry
+- *(registry)* Add semantic search tests (feature-gated)
+- *(mcp)* Add comprehensive tests for enhanced resources, tool, prompts
+
 ## [0.6.1] - 2026-03-15
 
 ### Features
