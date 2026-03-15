@@ -257,6 +257,7 @@ fn mcp_list_tools() {
         "delete_rule",
         "add_rule_example",
         "migrate_rules",
+        "update_batch_status",
     ];
     for name in &expected {
         assert!(names.contains(name), "missing tool: {name}");

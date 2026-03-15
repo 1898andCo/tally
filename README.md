@@ -320,7 +320,7 @@ Configure in `.mcp.json` for Claude Code:
 }
 ```
 
-### Tools (23)
+### Tools (24)
 
 | Tool | Description |
 |------|-------------|
@@ -329,6 +329,7 @@ Configure in `.mcp.json` for Claude Code:
 | `record_batch` | Batch record multiple findings |
 | `query_findings` | Search with filters, TallyQL expressions, sorting, date ranges, text search |
 | `update_finding_status` | Transition lifecycle state |
+| `update_batch_status` | Transition multiple findings' status in one call (partial success) |
 | `update_finding` | Edit mutable fields (title, description, severity, etc.) with audit trail |
 | `get_finding_context` | Retrieve finding with full context, notes, and edit history |
 | `add_note` | Append timestamped note without changing status |
@@ -348,29 +349,37 @@ Configure in `.mcp.json` for Claude Code:
 | `add_rule_example` | Add a code example to a rule |
 | `migrate_rules` | Auto-register rules from existing findings |
 
-### Resources (9)
+### Resources (14)
 
 | URI | Description |
 |-----|-------------|
 | `findings://docs/tallyql-syntax` | TallyQL query language syntax reference (markdown) |
 | `findings://docs/rule-registry` | Rule registry format, matching pipeline, CLI/MCP reference |
 | `findings://summary` | Counts by severity/status, 10 most recent |
+| `findings://version` | Tally version, feature flags, rule count, finding count |
+| `findings://rules/summary` | Rule registry summary: counts by status/category, top 10, zero-finding rules |
 | `findings://file/{path}` | All findings in a specific file |
 | `findings://detail/{uuid}` | Full finding with history, relationships, tags, PR context |
 | `findings://severity/{level}` | All findings at a severity level |
 | `findings://status/{state}` | All findings in a lifecycle state |
 | `findings://rule/{rule_id}` | All findings matching a rule ID |
 | `findings://pr/{pr_number}` | All findings from a specific PR |
+| `findings://rules/{rule_id}` | Full rule JSON plus all findings for that rule |
+| `findings://agent/{agent_id}` | All findings discovered by a specific agent |
+| `findings://timeline/{duration}` | Finding creation/resolution timeline for a duration (e.g., 7d, 30d) |
 
-### Prompts (5)
+### Prompts (8)
 
 | Prompt | Description |
 |--------|-------------|
-| `triage-file` | Triage all findings in a file by severity and suggest resolution order |
-| `fix-finding` | Generate a fix plan for a specific finding with code changes |
-| `summarize-findings` | Executive summary of all open findings with risk assessment |
-| `review-pr` | Review a PR's changes against tracked findings |
+| `triage-file` | Triage all findings in a file by severity and suggest resolution order (with rule scope checks) |
+| `fix-finding` | Generate a fix plan for a specific finding with code changes (includes rule examples and fix patterns) |
+| `summarize-findings` | Executive summary of all open findings with risk assessment and rule registry health |
+| `review-pr` | Review a PR's changes against tracked findings (auto-detects PR, shows new vs recurring) |
 | `explain-finding` | Explain a finding's context, impact, and remediation options |
+| `consolidate-rules` | Analyze all rules and suggest merges, alias improvements, and deprecation candidates |
+| `rule-coverage-report` | Compare rules vs findings to identify registry gaps and unregistered patterns |
+| `triage-by-rule` | Group open findings by rule and suggest per-group prioritization and fix strategy |
 
 ## Storage Model
 
