@@ -14,12 +14,14 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
+chumsky = "0.10"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 comfy-table = "7"
 git2 = "0.20"
 hex = "0.4"
 home = "0.5"
+humantime = "2"
 rmcp = { version = "0.8", features = ["server", "transport-io", "macros"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }

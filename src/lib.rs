@@ -8,5 +8,6 @@ pub mod cli;
 pub mod error;
 pub mod mcp;
 pub mod model;
+pub mod query;
 pub mod session;
 pub mod storage;

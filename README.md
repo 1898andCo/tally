@@ -78,6 +78,10 @@ tally record \
 # Query findings
 tally query --severity critical --format table
 
+# Advanced query with TallyQL
+tally query --filter 'severity = critical AND file CONTAINS "api"'
+tally query --since 7d --sort severity --text unwrap
+
 # Update status
 tally update <uuid> --status in-progress --reason "fixing now"
 
@@ -115,7 +119,7 @@ Logging can also be controlled with the `RUST_LOG` environment variable (e.g., `
 | `init` | Initialize `findings-data` orphan branch |
 | `record` | Create or deduplicate a single finding |
 | `record-batch` | Batch record from JSONL file or stdin |
-| `query` | Search findings with filters (including `--tag`) |
+| `query` | Search findings with filters, TallyQL expressions, sorting |
 | `update` | Change lifecycle status |
 | `update-fields` | Edit mutable fields (title, description, severity, etc.) |
 | `note` | Add timestamped note without changing status |
@@ -154,14 +158,65 @@ Logging can also be controlled with the `RUST_LOG` environment variable (e.g., `
 ### `tally query`
 
 ```
---status <state>        Filter by lifecycle status
---severity <level>      Filter by severity
+--status <state>        Filter by lifecycle status (comma-separated)
+--severity <level>      Filter by severity (comma-separated)
 --file <pattern>        Filter by file path (substring match)
 --rule <id>             Filter by rule ID
 --related-to <id>       Filter by related finding ID
+--tag <pattern>         Filter by tag (substring match)
+--filter <expr>         TallyQL filter expression (see below)
+--since <dur|date>      Findings created after (7d, 24h, 2026-03-01)
+--before <dur|date>     Findings created before
+--agent <id>            Filter by agent ID (exact match)
+--category <name>       Filter by category (exact match)
+--not-status <state>    Exclude findings with this status
+--text <search>         Full-text search (title, description, suggested_fix, evidence)
+--sort <field>          Sort by field (repeatable: --sort severity --sort title)
+--sort-dir <dir>        Sort direction: asc | desc
 --format <fmt>          json | table | summary (default: json)
 --limit <n>             Max results (default: 100)
 ```
+
+All filters are AND-combined. `--filter` accepts TallyQL expressions for complex queries.
+
+#### TallyQL Expression Language
+
+TallyQL supports boolean operators, comparisons, string operations, and date literals:
+
+```bash
+# Boolean operators (AND, OR, NOT) with precedence
+tally query --filter 'severity = critical AND file CONTAINS "api"'
+tally query --filter 'severity = critical OR severity = important'
+tally query --filter 'NOT status = closed'
+
+# String operators (CONTAINS, STARTSWITH, ENDSWITH) — case-insensitive
+tally query --filter 'title CONTAINS "unwrap"'
+tally query --filter 'file STARTSWITH "src/api"'
+
+# Existence checks (HAS, MISSING)
+tally query --filter 'HAS suggested_fix'
+tally query --filter 'MISSING evidence'
+
+# IN lists
+tally query --filter 'severity IN (critical, important)'
+
+# Date comparisons (relative durations or ISO 8601)
+tally query --filter 'created_at > 7d'
+tally query --filter 'created_at > "2026-03-01"'
+
+# Parenthesized grouping
+tally query --filter 'severity = critical AND (file CONTAINS "api" OR file CONTAINS "handler")'
+
+# Combined with flags
+tally query --filter 'HAS suggested_fix' --sort severity --sort-dir desc --since 30d
+
+# Operator aliases: && || ! == are supported
+tally query --filter 'severity == critical && !status = closed'
+```
+
+**Fields:** `severity`, `status`, `file`, `rule`, `title`, `description`, `suggested_fix`, `evidence`, `category`, `agent`, `tag`, `created_at`, `updated_at`
+
+**Severity ordering:** `critical > important > suggestion > tech_debt` (supports `>`, `<`, `>=`, `<=`)
 
 ### `tally suppress`
 
@@ -232,7 +287,7 @@ Configure in `.mcp.json` for Claude Code:
 | `initialize_store` | Initialize the findings-data branch (idempotent) |
 | `record_finding` | Create or deduplicate a finding |
 | `record_batch` | Batch record multiple findings |
-| `query_findings` | Search with filters (status, severity, file, rule, tag) |
+| `query_findings` | Search with filters, TallyQL expressions, sorting, date ranges, text search |
 | `update_finding_status` | Transition lifecycle state |
 | `update_finding` | Edit mutable fields (title, description, severity, etc.) with audit trail |
 | `get_finding_context` | Retrieve finding with full context, notes, and edit history |

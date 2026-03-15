@@ -137,6 +137,30 @@ pub struct QueryFindingsInput {
         description = "Filter by tag (substring match against finding's tags array, e.g., 'story:1.21')"
     )]
     pub tag: Option<String>,
+    #[schemars(
+        description = "TallyQL filter expression for advanced queries. Supports boolean operators (AND, OR, NOT), comparisons (=, !=, >, <), string ops (CONTAINS, STARTSWITH, ENDSWITH), existence checks (HAS, MISSING), IN lists, and date literals (7d, 24h, '2026-03-01'). Examples: 'severity = critical AND file CONTAINS \"api\"', 'HAS suggested_fix', 'created_at > 7d', 'severity IN (critical, important) OR status = open'"
+    )]
+    pub filter: Option<String>,
+    #[schemars(
+        description = "Sort results by field. One of: severity, status, created_at, updated_at, file, rule, title. Prefix with - for descending (e.g., '-severity'). Default: unsorted."
+    )]
+    pub sort: Option<String>,
+    #[schemars(
+        description = "Filter to findings created after this time. Accepts relative duration (7d, 24h, 1h) or ISO 8601 date (2026-03-01)"
+    )]
+    pub since: Option<String>,
+    #[schemars(
+        description = "Filter to findings created before this time. Accepts relative duration (7d, 24h) or ISO 8601 date (2026-03-01)"
+    )]
+    pub before: Option<String>,
+    #[schemars(description = "Filter by agent ID (exact match against discovered_by agent_id)")]
+    pub agent: Option<String>,
+    #[schemars(description = "Filter by category (exact match)")]
+    pub category: Option<String>,
+    #[schemars(
+        description = "Full-text search across title, description, suggested_fix, and evidence (case-insensitive substring)"
+    )]
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -526,7 +550,7 @@ impl TallyMcpServer {
     }
 
     #[tool(
-        description = "Search findings with optional filters. Returns a JSON array of matching findings. All filters are AND-combined. Omit all filters to get all findings. Empty result returns []. Each finding includes uuid, severity, status, title, locations, relationships, and full state_history."
+        description = "Search findings with optional filters. Returns a JSON array of matching findings. All filters are AND-combined. Omit all filters to get all findings. Empty result returns []. Supports TallyQL filter expressions for advanced queries with boolean logic, comparisons, and string operations."
     )]
     pub async fn query_findings(
         &self,
@@ -536,6 +560,7 @@ impl TallyMcpServer {
         let store = self.store()?;
         let mut findings = store.load_all().map_err(to_mcp_err)?;
 
+        // Basic filters (backward compatible)
         if let Some(ref s) = input.status {
             if let Ok(status) = s.parse::<LifecycleState>() {
                 findings.retain(|f| f.status == status);
@@ -559,6 +584,54 @@ impl TallyMcpServer {
         if let Some(ref tag_filter) = input.tag {
             findings.retain(|f| f.tags.iter().any(|t| t.contains(tag_filter.as_str())));
         }
+
+        // TallyQL expression filter
+        let parsed_expr = if let Some(ref expr_str) = input.filter {
+            let expr = crate::query::parse_tallyql(expr_str).map_err(|errs| {
+                let msg = errs
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                to_mcp_err(crate::error::TallyError::InvalidInput(format!(
+                    "TallyQL parse error: {msg}"
+                )))
+            })?;
+            Some(expr)
+        } else {
+            None
+        };
+
+        // Enhanced filters (since, before, agent, category, text)
+        let since_dt = parse_mcp_datetime(input.since.as_deref())?;
+        let before_dt = parse_mcp_datetime(input.before.as_deref())?;
+
+        crate::query::eval::apply_filters(
+            &mut findings,
+            parsed_expr.as_ref(),
+            since_dt,
+            before_dt,
+            input.agent.as_deref(),
+            input.category.as_deref(),
+            None, // not_status not needed for MCP (use filter expression instead)
+            input.text.as_deref(),
+        );
+
+        // Sorting
+        if let Some(ref sort_str) = input.sort {
+            let (field, descending) = if let Some(stripped) = sort_str.strip_prefix('-') {
+                (stripped.to_string(), true)
+            } else {
+                (sort_str.clone(), false)
+            };
+            crate::query::fields::validate_sort_field(&field)
+                .map_err(|e| to_mcp_err(crate::error::TallyError::InvalidInput(e)))?;
+            crate::query::eval::apply_sort(
+                &mut findings,
+                &[crate::query::ast::SortSpec { field, descending }],
+            );
+        }
+
         findings.truncate(input.limit.unwrap_or(100));
 
         Ok(CallToolResult::success(vec![Content::text(
@@ -1610,6 +1683,43 @@ fn to_mcp_err(e: crate::error::TallyError) -> McpError {
         message: e.to_string().into(),
         data: None,
     }
+}
+
+/// Parse a datetime string for MCP: relative durations or ISO 8601.
+fn parse_mcp_datetime(
+    input: Option<&str>,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, McpError> {
+    let Some(s) = input else {
+        return Ok(None);
+    };
+
+    // Try relative duration (via humantime)
+    if let Ok(duration) = humantime::parse_duration(s) {
+        let delta = chrono::TimeDelta::from_std(duration).map_err(|_| {
+            to_mcp_err(crate::error::TallyError::InvalidInput(format!(
+                "duration '{s}' out of range"
+            )))
+        })?;
+        return Ok(Some(chrono::Utc::now() - delta));
+    }
+
+    // Try RFC 3339
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Ok(Some(dt.with_timezone(&chrono::Utc)));
+    }
+
+    // Try ISO 8601 date
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        let dt = date
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight is always valid")
+            .and_utc();
+        return Ok(Some(dt));
+    }
+
+    Err(to_mcp_err(crate::error::TallyError::InvalidInput(format!(
+        "invalid date/duration: '{s}'"
+    ))))
 }
 
 /// Resolve a finding ID that can be either a UUID or a session short ID.
