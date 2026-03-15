@@ -207,6 +207,7 @@ fn filter_parser<'a>() -> impl Parser<'a, &'a str, FilterExpr, extra::Err<Rich<'
             .then(
                 value_parser()
                     .separated_by(just(',').padded())
+                    .at_least(1)
                     .collect::<Vec<_>>()
                     .delimited_by(just('(').padded(), just(')').padded()),
             )
