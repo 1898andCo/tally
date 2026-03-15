@@ -300,10 +300,11 @@ Configure in `.mcp.json` for Claude Code:
 | `rebuild_index` | Rebuild index.json from finding files |
 | `import_findings` | Import from dclaude/zclaude state files |
 
-### Resources (7)
+### Resources (8)
 
 | URI | Description |
 |-----|-------------|
+| `findings://docs/tallyql-syntax` | TallyQL query language syntax reference (markdown) |
 | `findings://summary` | Counts by severity/status, 10 most recent |
 | `findings://file/{path}` | All findings in a specific file |
 | `findings://detail/{uuid}` | Full finding with history, relationships, tags, PR context |

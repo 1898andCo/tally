@@ -550,7 +550,7 @@ impl TallyMcpServer {
     }
 
     #[tool(
-        description = "Search findings with optional filters. Returns a JSON array of matching findings. All filters are AND-combined. Omit all filters to get all findings. Empty result returns []. Supports TallyQL filter expressions for advanced queries with boolean logic, comparisons, and string operations."
+        description = "Search findings with optional filters. All filters are AND-combined. Supports TallyQL expressions via 'filter' parameter for boolean logic (AND/OR/NOT), comparisons (=, !=, >, <), string ops (CONTAINS, STARTSWITH, ENDSWITH), existence checks (HAS, MISSING), IN lists, and date literals (7d, 24h). Full syntax reference: read resource findings://docs/tallyql-syntax"
     )]
     pub async fn query_findings(
         &self,
@@ -594,7 +594,7 @@ impl TallyMcpServer {
                     .collect::<Vec<_>>()
                     .join("; ");
                 to_mcp_err(crate::error::TallyError::InvalidInput(format!(
-                    "TallyQL parse error: {msg}"
+                    "TallyQL parse error: {msg}. Syntax reference: read resource findings://docs/tallyql-syntax"
                 )))
             })?;
             Some(expr)
@@ -1500,7 +1500,7 @@ impl ServerHandler for TallyMcpServer {
                 icons: None,
                 website_url: None,
             },
-            instructions: Some("tally — persistent findings tracker backed by git. Use record_finding when you discover an issue in code. Use query_findings to check existing findings before recording (avoids duplicates). Use update_finding_status to track progress (open→in_progress→resolved→closed). Findings persist across sessions with stable UUIDs. Short IDs (C1, I2, S3) are accepted anywhere a UUID is expected. Severity levels: critical, important, suggestion, tech_debt.".into()),
+            instructions: Some("tally — persistent findings tracker backed by git. Use record_finding when you discover an issue in code. Use query_findings to check existing findings before recording (avoids duplicates). Use update_finding_status to track progress (open→in_progress→resolved→closed). Findings persist across sessions with stable UUIDs. Short IDs (C1, I2, S3) are accepted anywhere a UUID is expected. Severity levels: critical, important, suggestion, tech_debt. For advanced queries, use the 'filter' parameter with TallyQL expressions — read findings://docs/tallyql-syntax for the full syntax reference.".into()),
         }
     }
 
@@ -1542,9 +1542,20 @@ impl ServerHandler for TallyMcpServer {
         );
         resource.mime_type = Some("application/json".into());
 
+        let mut tallyql_doc =
+            RawResource::new("findings://docs/tallyql-syntax", "TallyQL Syntax Reference");
+        tallyql_doc.description = Some(
+            "Complete TallyQL query language reference: grammar, operators, fields, values, and examples. Read this before constructing filter expressions."
+                .into(),
+        );
+        tallyql_doc.mime_type = Some("text/markdown".into());
+
         Ok(ListResourcesResult {
             next_cursor: None,
-            resources: vec![Annotated::new(resource, None)],
+            resources: vec![
+                Annotated::new(resource, None),
+                Annotated::new(tallyql_doc, None),
+            ],
         })
     }
 
@@ -1639,7 +1650,9 @@ impl ServerHandler for TallyMcpServer {
         let store = self.store()?;
         let uri = &request.uri;
 
-        let content = if uri == "findings://summary" {
+        let content = if uri == "findings://docs/tallyql-syntax" {
+            include_str!("../../docs/reference/tallyql-syntax.md").to_string()
+        } else if uri == "findings://summary" {
             read_resource_summary(&store)?
         } else if let Some(path) = uri.strip_prefix("findings://file/") {
             read_resource_file(&store, path)?

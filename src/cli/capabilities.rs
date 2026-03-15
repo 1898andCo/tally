@@ -25,7 +25,8 @@ pub fn handle_mcp_capabilities() {
     }
 
     // Resources — static list (resource templates aren't queryable without RequestContext)
-    println!("\nResources (7):");
+    println!("\nResources (8):");
+    println!("  findings://docs/tallyql-syntax  TallyQL query language syntax reference");
     println!("  findings://summary              Counts by severity/status + recent");
     println!("  findings://file/{{path}}          All findings in a file");
     println!("  findings://detail/{{uuid}}        Full finding with history, relationships, tags");
