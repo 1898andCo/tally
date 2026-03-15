@@ -69,11 +69,11 @@ So that **the rule registry reflects my project's actual code review standards**
 - Stage 2: Exact match on canonical rule IDs (HashMap, nanoseconds)
 - Stage 3: Alias lookup — each rule has an `aliases` array; any alias maps to the canonical ID
 - Stage 4: CWE cross-reference — if the agent provides a CWE ID, match against rules with the same CWE. **Confidence 0.7 (suggestion only, not auto-normalize)** — CWE IDs are too broad for auto-match (e.g., CWE-252 covers unchecked malloc, setuid, fork, file ops — all different remediation). Per SARIF v2.1 and CWE mapping analysis research.
-- Stage 5: Levenshtein/Jaro-Winkler on rule IDs (`strsim` crate, threshold >= 0.85 for auto-match, 0.6-0.84 for suggestion)
-- Stage 6: Token Jaccard on descriptions (tokenize, remove stopwords, Jaccard >= 0.5 for suggestion)
-- Stage 7: Semantic embedding cosine similarity (optional, behind `--features semantic-search` cargo feature flag, threshold >= 0.8)
+- Stage 5: Jaro-Winkler on rule IDs (`strsim` crate, **suggestion only** >= 0.6). **DEVIATION from original spec:** Deep research (Perplexity, Mar 2026) confirmed that production tools (Semgrep, SonarQube, SARIF v2.1) use deterministic matching for rule IDs — exact match or explicit aliases only. Jaro-Winkler auto-match at >= 0.85 causes false positives on structured IDs due to prefix-weighting (e.g., `rule-crit1` vs `rule-crit2` = JW 0.97, falsely auto-matched). Changed to suggestion-only: JW >= 0.6 populates `similar_rules` but never auto-normalizes. Only exact match (Stage 2) and alias lookup (Stage 3) auto-resolve.
+- Stage 6: Token Jaccard on descriptions (tokenize, remove stopwords, Jaccard >= 0.5 for suggestion only)
+- Stage 7: Semantic embedding cosine similarity (optional, behind `--features semantic-search` cargo feature flag, threshold >= 0.8, suggestion only)
 - Each match returns `{ canonical_id, confidence: f64, method: &str }`
-- Confidence >= 0.85 auto-normalizes; 0.6-0.84 suggests but doesn't auto-normalize; < 0.6 registers as new rule
+- Confidence 1.0 (exact/alias) auto-normalizes; all fuzzy matches (Stages 4-7) populate `similar_rules` suggestions only; no match registers as new rule
 
 ### AC-3: Auto-Registration
 - When `record_finding` encounters an unknown rule ID, auto-register it as a new rule with status `experimental`
@@ -1524,8 +1524,51 @@ Then define `RuleCommand` as a separate `#[derive(Subcommand)]` enum with `Creat
 
 ### Agent Model Used
 
-### Debug Log References
+Claude Opus 4.6 (1M context)
 
 ### Completion Notes List
 
+1. **AC-2 Stage 5 deviation:** Changed from auto-match at JW >= 0.85 to suggestion-only. Deep research (Perplexity, Mar 2026) confirmed production tools use deterministic rule ID matching. JW prefix-weighting causes false positives on structured identifiers.
+2. **Beyond-spec deliverables:** `update_batch_status` tool, 5 additional resources (version, rules/summary, rules/{id}, agent/{id}, timeline/{duration}), 3 new prompts (consolidate-rules, rule-coverage-report, triage-by-rule), 4 enhanced prompts (fix-finding, triage-file, review-pr, summarize-findings).
+3. **Test coverage:** 770 tests (630 existing + 140 new), 79.8% line coverage. 20 additional feature-gated semantic search tests.
+4. **dclaude v2.9.0:** 7 skills updated, CLAUDE.md documented, seed rules file.
+
 ### File List
+
+**New files:**
+- `src/registry/mod.rs` — module declaration, re-exports
+- `src/registry/rule.rs` — Rule struct, RuleStatus, RuleScope, RuleExample
+- `src/registry/store.rs` — RuleStore CRUD
+- `src/registry/matcher.rs` — 7-stage matching pipeline
+- `src/registry/normalize.rs` — canonical normalization + validation
+- `src/registry/stopwords.rs` — minimal stopwords for Jaccard
+- `src/registry/scope.rs` — glob-based scope enforcement
+- `src/registry/semantic.rs` — fastembed embeddings (feature-gated)
+- `src/cli/rule.rs` — 8 CLI subcommand handlers + migrate + reindex
+- `docs/reference/rule-registry.md` — standalone MCP resource reference
+- `tests/registry_model_test.rs` — 25 tests
+- `tests/registry_normalize_test.rs` — 36 tests
+- `tests/registry_matcher_test.rs` — 27 tests
+- `tests/registry_scope_test.rs` — 8 tests
+- `tests/cli_rule_test.rs` — 14 tests
+- `tests/e2e_rule_registry_test.rs` — 3 tests
+- `tests/property_registry.rs` — 4 property tests
+- `tests/registry_semantic_test.rs` — 20 feature-gated tests
+- `tests/mcp_enhanced_test.rs` — 14 tests
+- `tests/e2e_mcp_workflow_test.rs` — 9 tests
+
+**Modified files:**
+- `Cargo.toml` — strsim, globset, fastembed (optional), version 0.7.0
+- `src/lib.rs` — pub mod registry
+- `src/model/finding.rs` — original_rule_id field
+- `src/storage/git_store.rs` — upsert_file Modified retry, init rules/.gitkeep, sync rule conflict resolution, rebuild_rule_counts, ensure_rules_dir
+- `src/cli/mod.rs` — Rule subcommand, RuleCommand enum, RebuildIndex --include-rules
+- `src/cli/record.rs` — matcher integration, scope check, rule info output
+- `src/main.rs` — Rule command dispatch, Reindex
+- `src/mcp/server.rs` — 9 new tools, 5 new resources, 3 new prompts, 4 enhanced prompts, dedup fix, matcher integration
+- `src/query/fields.rs` — strsim replacement
+- `README.md` — rule registry section, updated counts
+- `CLAUDE.md` — project state, On-Demand References
+- `.typos.toml` — actve allowlist
+- `.github/workflows/ci.yml` — semantic-search test job
+- `justfile` — llvm-cov path fix
