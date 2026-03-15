@@ -126,12 +126,21 @@ pub enum Command {
     },
 
     /// Query findings with filters. All filters are AND-combined. Omit all filters to get all findings.
+    ///
+    /// TallyQL expression language (--filter): supports boolean operators (AND, OR, NOT),
+    /// comparisons (=, !=, >, <), string ops (CONTAINS, STARTSWITH, ENDSWITH),
+    /// existence checks (HAS, MISSING), IN lists, and date literals (7d, 24h, "2026-03-01").
+    ///
+    /// Examples:
+    ///   tally query --filter 'severity = critical AND file CONTAINS "api"'
+    ///   tally query --severity critical,important --since 7d --sort severity
+    ///   tally query --text unwrap --not-status closed
     Query {
-        /// Filter by lifecycle status. Values: open, acknowledged, in_progress, resolved, false_positive, wont_fix, deferred, suppressed, reopened, closed.
+        /// Filter by lifecycle status (comma-separated). Values: open, acknowledged, in_progress, resolved, false_positive, wont_fix, deferred, suppressed, reopened, closed.
         #[arg(long)]
         status: Option<String>,
 
-        /// Filter by severity. Values: critical, important, suggestion, tech-debt.
+        /// Filter by severity (comma-separated). Values: critical, important, suggestion, tech-debt.
         #[arg(long)]
         severity: Option<String>,
 
@@ -150,6 +159,42 @@ pub enum Command {
         /// Filter by tag (substring match against finding's tags).
         #[arg(long)]
         tag: Option<String>,
+
+        /// TallyQL filter expression. Examples: 'severity = critical AND file CONTAINS "api"', 'HAS suggested_fix', 'created_at > 7d'.
+        #[arg(long)]
+        filter: Option<String>,
+
+        /// Filter by creation date (findings created after). Accepts duration (7d, 24h) or ISO 8601 date (2026-03-01).
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Filter by creation date (findings created before). Accepts duration (7d, 24h) or ISO 8601 date (2026-03-01).
+        #[arg(long)]
+        before: Option<String>,
+
+        /// Filter by agent ID (exact match against discovered_by agent_id).
+        #[arg(long)]
+        agent: Option<String>,
+
+        /// Filter by category (exact match).
+        #[arg(long)]
+        category: Option<String>,
+
+        /// Exclude findings with this status.
+        #[arg(long)]
+        not_status: Option<String>,
+
+        /// Full-text search across title, description, suggested_fix, and evidence (case-insensitive).
+        #[arg(long)]
+        text: Option<String>,
+
+        /// Sort by field (repeatable for multi-field sort). Fields: severity, status, created_at, updated_at, file, rule, title.
+        #[arg(long)]
+        sort: Vec<String>,
+
+        /// Sort direction. Default: desc for date fields, asc for others.
+        #[arg(long)]
+        sort_dir: Option<String>,
 
         /// Output format.
         #[arg(long, value_enum, default_value = "json")]
