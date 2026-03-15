@@ -84,7 +84,9 @@ pub fn validate_field(name: &str) -> std::result::Result<(), String> {
 
     let suggestion = KNOWN_FIELDS
         .iter()
-        .filter(|f| f.contains(name) || name.contains(**f) || levenshtein(f, name) <= 2)
+        .filter(|f| {
+            f.contains(name) || name.contains(**f) || strsim::normalized_levenshtein(f, name) >= 0.6
+        })
         .copied()
         .next();
 
@@ -97,26 +99,6 @@ pub fn validate_field(name: &str) -> std::result::Result<(), String> {
         let _ = write!(msg, ". Did you mean '{s}'?");
     }
     Err(msg)
-}
-
-/// Simple Levenshtein distance for typo suggestions.
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let (m, n) = (a.len(), b.len());
-
-    let mut prev = (0..=n).collect::<Vec<_>>();
-    let mut curr = vec![0; n + 1];
-
-    for i in 1..=m {
-        curr[0] = i;
-        for j in 1..=n {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[n]
 }
 
 /// Validate a sort field name.
