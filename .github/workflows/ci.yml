@@ -96,6 +96,28 @@ jobs:
       - run: cargo test --all-targets
       - run: cargo test --doc --all-features
 
+  test-semantic:
+    name: Test (semantic-search)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[semantic]')
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-model-v1
+      - run: cargo test --all-targets --features semantic-search
+
   deny:
     name: Cargo Deny
     runs-on: ubuntu-latest

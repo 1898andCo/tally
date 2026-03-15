@@ -5,10 +5,12 @@
 
 ## Project State (Mar 2026)
 
-Single binary crate (`tally-ng` on crates.io, binary name `tally`). v0.5.1.
-630+ tests. Dual interface: CLI (clap) + MCP server (rmcp).
+Single binary crate (`tally-ng` on crates.io, binary name `tally`). v0.7.0.
+747+ tests. Dual interface: CLI (clap) + MCP server (rmcp, 23 tools).
 Git-backed storage on orphan `findings-data` branch via `git2`.
 TallyQL query language (Chumsky 0.10 parser) for advanced filtering.
+Rule registry with normalization, alias resolution, scope enforcement,
+and optional semantic search (`--features semantic-search`).
 
 ## Build & Test
 
@@ -47,5 +49,7 @@ Git Flow — branch from `develop`, PRs target `develop`.
 | Finding mutability story | `docs/story-finding-mutability.md` |
 | TallyQL query language story | `_bmad-output/implementation-artifacts/1-1-tallyql-query-language.md` |
 | TallyQL syntax reference | `README.md` → "TallyQL Expression Language" section |
+| Rule registry reference | `docs/reference/rule-registry.md` |
+| Rule registry story | `_bmad-output/implementation-artifacts/1-2-rule-registry.md` |
 | Release process | `docs/story-finding-mutability.md` → "Release Process" section |
 | MCP server config | `.mcp.json` |
