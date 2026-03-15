@@ -190,7 +190,7 @@ fn cli_update_with_relationship() {
             "--title",
             "A",
             "--rule",
-            "r",
+            "r1",
         ])
         .current_dir(tmp.path())
         .output()
@@ -259,7 +259,7 @@ fn cli_update_with_short_id() {
             "--title",
             "short id test",
             "--rule",
-            "r",
+            "r1",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -411,7 +411,7 @@ fn cli_suppress_invalid_date() {
             "--title",
             "t",
             "--rule",
-            "r",
+            "r1",
         ])
         .current_dir(tmp.path())
         .output()
@@ -455,7 +455,7 @@ fn cli_suppress_file_level_type() {
             "--title",
             "t",
             "--rule",
-            "r",
+            "r1",
         ])
         .current_dir(tmp.path())
         .output()
@@ -512,7 +512,7 @@ fn cli_suppress_inline_type_with_pattern() {
             "--title",
             "t",
             "--rule",
-            "r",
+            "r1",
         ])
         .current_dir(tmp.path())
         .output()
@@ -571,7 +571,7 @@ fn cli_suppress_inline_without_pattern_fails() {
             "--title",
             "t",
             "--rule",
-            "r",
+            "r1",
         ])
         .current_dir(tmp.path())
         .output()
@@ -617,7 +617,7 @@ fn cli_suppress_invalid_type_fails() {
             "--title",
             "t",
             "--rule",
-            "r",
+            "r1",
         ])
         .current_dir(tmp.path())
         .output()
@@ -663,7 +663,7 @@ fn cli_suppress_already_resolved_fails() {
             "--title",
             "resolved finding",
             "--rule",
-            "r",
+            "r1",
         ])
         .current_dir(tmp.path())
         .output()

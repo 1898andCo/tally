@@ -366,6 +366,18 @@ struct ToolOutput {
     distance: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rule_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_rule_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    normalized_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    similar_rules: Option<Vec<crate::registry::SimilarRule>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_merged: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope_warning: Option<String>,
 }
 
 // --- Constructor ---
@@ -461,17 +473,57 @@ impl TallyMcpServer {
             vec![primary_location.clone()]
         };
 
-        let fingerprint = compute_fingerprint(&primary_location, &input.rule_id);
+        let agent = input.agent.as_deref().unwrap_or("mcp-client");
+
+        // Resolve rule ID through registry matching pipeline
+        let rules = crate::registry::store::RuleStore::load_all_rules(&store).unwrap_or_default();
+        let matcher = crate::registry::RuleMatcher::new(rules);
+        let desc = input.description.as_deref();
+        let match_result = matcher
+            .resolve(&input.rule_id, None, desc)
+            .map_err(to_mcp_err)?;
+
+        let canonical_rule_id = match_result.canonical_id.clone();
+        let original_rule_id = {
+            let normalized = crate::registry::normalize_rule_id(&input.rule_id)
+                .unwrap_or_else(|_| input.rule_id.clone());
+            (normalized != canonical_rule_id).then(|| input.rule_id.clone())
+        };
+
+        // Auto-register new rules
+        if match_result.method == "auto_registered" {
+            let mut auto_rule = crate::registry::Rule::new(
+                canonical_rule_id.clone(),
+                canonical_rule_id.clone(),
+                input.description.clone().unwrap_or_default(),
+            );
+            auto_rule.status = crate::registry::RuleStatus::Experimental;
+            auto_rule.category = input.category.clone().unwrap_or_default();
+            auto_rule.severity_hint.clone_from(&input.severity);
+            auto_rule.created_by = agent.to_string();
+            if let Err(e) = crate::registry::store::RuleStore::save_rule(&store, &auto_rule) {
+                tracing::warn!(error = %e, "Failed to auto-register rule");
+            }
+        }
+
+        let normalized_by = (match_result.method != "exact").then(|| match_result.method.clone());
+        let similar_rules = if match_result.similar_rules.is_empty() {
+            None
+        } else {
+            Some(match_result.similar_rules.clone())
+        };
+
+        // Use canonical rule ID for fingerprint
+        let fingerprint = compute_fingerprint(&primary_location, &canonical_rule_id);
         let existing = store.load_all().unwrap_or_default();
         let resolver = FindingIdentityResolver::from_findings(&existing);
         let resolution = resolver.resolve(
             &fingerprint,
             &input.file_path,
             input.line_start,
-            &input.rule_id,
+            &canonical_rule_id,
             5,
         );
-        let agent = input.agent.as_deref().unwrap_or("mcp-client");
         let (repo_id, branch, commit_sha) = store.git_context();
         let ctx = GitContext {
             repo_id,
@@ -480,14 +532,41 @@ impl TallyMcpServer {
         };
 
         let output = match resolution {
-            IdentityResolution::ExistingFinding { uuid } => ToolOutput {
-                status: "deduplicated".into(),
-                uuid: Some(uuid.to_string()),
-                message: None,
-                related_to: None,
-                distance: None,
-                expires_at: None,
-            },
+            IdentityResolution::ExistingFinding { uuid } => {
+                // Fix: append agent to discovered_by on dedup (match CLI behavior)
+                let mut finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
+                let session_id = input.session_id.clone().unwrap_or_default();
+                let already_recorded = finding
+                    .discovered_by
+                    .iter()
+                    .any(|a| a.agent_id == agent && a.session_id == session_id);
+
+                if !already_recorded {
+                    finding.discovered_by.push(AgentRecord {
+                        agent_id: agent.to_string(),
+                        session_id: session_id.clone(),
+                        detected_at: Utc::now(),
+                        session_short_id: None,
+                    });
+                    finding.updated_at = Utc::now();
+                    store.save_finding(&finding).map_err(to_mcp_err)?;
+                }
+
+                ToolOutput {
+                    status: "deduplicated".into(),
+                    uuid: Some(uuid.to_string()),
+                    message: None,
+                    related_to: None,
+                    distance: None,
+                    expires_at: None,
+                    rule_id: Some(canonical_rule_id.clone()),
+                    original_rule_id: original_rule_id.clone(),
+                    normalized_by: normalized_by.clone(),
+                    similar_rules: similar_rules.clone(),
+                    agent_merged: Some(!already_recorded),
+                    scope_warning: None,
+                }
+            }
             IdentityResolution::RelatedFinding { uuid, distance } => {
                 let new_uuid = Uuid::now_v7();
                 let mut finding = build_finding(
@@ -499,6 +578,8 @@ impl TallyMcpServer {
                     agent,
                     &ctx,
                 );
+                finding.rule_id.clone_from(&canonical_rule_id);
+                finding.original_rule_id.clone_from(&original_rule_id);
                 add_input_relationship(
                     &store,
                     &mut finding,
@@ -513,6 +594,12 @@ impl TallyMcpServer {
                     related_to: Some(uuid.to_string()),
                     distance: Some(distance),
                     expires_at: None,
+                    rule_id: Some(canonical_rule_id.clone()),
+                    original_rule_id: original_rule_id.clone(),
+                    normalized_by: normalized_by.clone(),
+                    similar_rules: similar_rules.clone(),
+                    agent_merged: None,
+                    scope_warning: None,
                 }
             }
             IdentityResolution::NewFinding => {
@@ -526,6 +613,8 @@ impl TallyMcpServer {
                     agent,
                     &ctx,
                 );
+                finding.rule_id.clone_from(&canonical_rule_id);
+                finding.original_rule_id.clone_from(&original_rule_id);
                 add_input_relationship(
                     &store,
                     &mut finding,
@@ -540,6 +629,12 @@ impl TallyMcpServer {
                     related_to: None,
                     distance: None,
                     expires_at: None,
+                    rule_id: Some(canonical_rule_id.clone()),
+                    original_rule_id: original_rule_id.clone(),
+                    normalized_by: normalized_by.clone(),
+                    similar_rules: similar_rules.clone(),
+                    agent_merged: None,
+                    scope_warning: None,
                 }
             }
         };
@@ -718,6 +813,12 @@ impl TallyMcpServer {
                 related_to: None,
                 distance: None,
                 expires_at: None,
+                rule_id: None,
+                original_rule_id: None,
+                normalized_by: None,
+                similar_rules: None,
+                agent_merged: None,
+                scope_warning: None,
             })
             .unwrap_or_default(),
         )]))
@@ -859,6 +960,12 @@ impl TallyMcpServer {
                 related_to: None,
                 distance: None,
                 expires_at: expires_at.map(|d| d.to_rfc3339()),
+                rule_id: None,
+                original_rule_id: None,
+                normalized_by: None,
+                similar_rules: None,
+                agent_merged: None,
+                scope_warning: None,
             })
             .unwrap_or_default(),
         )]))
@@ -878,6 +985,12 @@ impl TallyMcpServer {
                 related_to: None,
                 distance: None,
                 expires_at: None,
+                rule_id: None,
+                original_rule_id: None,
+                normalized_by: None,
+                similar_rules: None,
+                agent_merged: None,
+                scope_warning: None,
             })
             .unwrap_or_default(),
         )]))
@@ -947,6 +1060,12 @@ impl TallyMcpServer {
                 related_to: None,
                 distance: None,
                 expires_at: None,
+                rule_id: None,
+                original_rule_id: None,
+                normalized_by: None,
+                similar_rules: None,
+                agent_merged: None,
+                scope_warning: None,
             })
             .unwrap_or_default(),
         )]))

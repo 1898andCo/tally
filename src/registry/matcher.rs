@@ -5,9 +5,16 @@
 //! 2. Exact match (`HashMap` lookup)
 //! 3. Alias lookup
 //! 4. CWE cross-reference (suggestion only, confidence 0.7)
-//! 5. Jaro-Winkler string similarity on IDs
-//! 6. Token Jaccard on descriptions
+//! 5. Jaro-Winkler similarity on rule IDs (suggestion only)
+//! 6. Token Jaccard on descriptions (suggestion only)
 //! 7. Semantic embedding (feature-gated, deferred)
+//!
+//! Deep research (Mar 2026) confirmed: production tools (Semgrep, `SonarQube`,
+//! SARIF v2.1) use deterministic matching for rule IDs — exact match or
+//! explicit aliases only. Fuzzy matching (JW, Levenshtein) populates
+//! `similar_rules` suggestions but never auto-normalizes. This prevents
+//! false positives like "rule-crit1" ≠ "rule-crit2" (JW=0.97, Lev=1).
+//! Auto-registration creates a new experimental rule for unknown IDs.
 
 use std::collections::HashMap;
 
@@ -17,8 +24,6 @@ use super::normalize::normalize_rule_id;
 use super::rule::Rule;
 use super::stopwords::remove_stopwords;
 
-/// Confidence threshold for auto-normalization.
-const AUTO_THRESHOLD: f64 = 0.85;
 /// Minimum confidence to include as a suggestion.
 const SUGGEST_THRESHOLD: f64 = 0.6;
 
@@ -36,7 +41,7 @@ pub struct MatchResult {
 }
 
 /// A similar rule suggestion.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SimilarRule {
     pub id: String,
     pub confidence: f64,
@@ -83,6 +88,10 @@ impl RuleMatcher {
 
     /// Resolve an input rule ID to a canonical ID through the matching pipeline.
     ///
+    /// Only exact matches and alias lookups auto-resolve. All fuzzy matches
+    /// (JW, Levenshtein, CWE, Jaccard) populate `similar_rules` as suggestions.
+    /// Unknown rule IDs are auto-registered with status `experimental`.
+    ///
     /// # Arguments
     /// * `input` — raw rule ID from the agent
     /// * `cwe_ids` — optional CWE IDs provided by the agent
@@ -122,6 +131,8 @@ impl RuleMatcher {
             });
         }
 
+        // --- From here, all matches are SUGGESTIONS only (never auto-normalize) ---
+
         // Stage 4: CWE cross-reference
         if let Some(cwe_ids) = cwe_ids {
             for cwe in cwe_ids {
@@ -137,7 +148,7 @@ impl RuleMatcher {
             }
         }
 
-        // Stage 5: Jaro-Winkler on rule IDs
+        // Stage 5: Jaro-Winkler on rule IDs (suggestion only)
         let mut best_jw_score = 0.0_f64;
         let mut best_jw_id = String::new();
 
@@ -149,7 +160,7 @@ impl RuleMatcher {
             }
         }
 
-        // Also check aliases for Jaro-Winkler
+        // Also check aliases for JW
         for (alias, canonical) in &self.alias_index {
             let score = strsim::jaro_winkler(&normalized, alias);
             if score > best_jw_score {
@@ -158,27 +169,15 @@ impl RuleMatcher {
             }
         }
 
-        if best_jw_score >= AUTO_THRESHOLD {
-            return Ok(MatchResult {
-                canonical_id: best_jw_id,
+        if best_jw_score >= SUGGEST_THRESHOLD && !similar_rules.iter().any(|s| s.id == best_jw_id) {
+            similar_rules.push(SimilarRule {
+                id: best_jw_id,
                 confidence: best_jw_score,
                 method: "jaro_winkler".to_string(),
-                similar_rules,
             });
         }
 
-        if best_jw_score >= SUGGEST_THRESHOLD {
-            // Don't duplicate if already in similar_rules from CWE
-            if !similar_rules.iter().any(|s| s.id == best_jw_id) {
-                similar_rules.push(SimilarRule {
-                    id: best_jw_id,
-                    confidence: best_jw_score,
-                    method: "jaro_winkler".to_string(),
-                });
-            }
-        }
-
-        // Stage 6: Token Jaccard on descriptions
+        // Stage 6: Token Jaccard on descriptions (suggestion only)
         if let Some(desc) = description {
             let query_tokens = tokenize(desc);
             let query_filtered = remove_stopwords(&query_tokens);
