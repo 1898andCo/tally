@@ -235,25 +235,36 @@ jobs:
           sha256=$(curl -sL "$url" | sha256sum | cut -d' ' -f1)
           echo "SHA256: ${sha256}"
 
-          # Generate updated formula
+          # Download prebuilt binary SHAs from the release
+          mac_url="https://github.com/1898andCo/tally/releases/download/${tag}/tally-${tag}-aarch64-apple-darwin.tar.gz"
+          linux_url="https://github.com/1898andCo/tally/releases/download/${tag}/tally-${tag}-x86_64-unknown-linux-gnu.tar.gz"
+          mac_sha=$(curl -sL "${mac_url}.sha256" | cut -d' ' -f1)
+          linux_sha=$(curl -sL "${linux_url}.sha256" | cut -d' ' -f1)
+
           cat > /tmp/tally.rb <<FORMULA
           class Tally < Formula
             desc "Git-backed findings tracker for AI coding agents"
             homepage "https://github.com/1898andCo/tally"
-            url "${url}"
-            sha256 "${sha256}"
+            version "${version}"
             license "Apache-2.0"
-            head "https://github.com/1898andCo/tally.git", branch: "develop"
+
+            on_macos do
+              url "${mac_url}"
+              sha256 "${mac_sha}"
+            end
+
+            on_linux do
+              url "${linux_url}"
+              sha256 "${linux_sha}"
+            end
 
             livecheck do
-              url :stable
+              url "https://github.com/1898andCo/tally/releases/latest"
               regex(/^v?(\d+(?:\.\d+)+)$/i)
             end
 
-            depends_on "rust" => :build
-
             def install
-              system "cargo", "install", *std_cargo_args
+              bin.install "tally"
             end
 
             test do
@@ -286,28 +297,38 @@ jobs:
         run: |
           tag="${{ needs.create-release.outputs.tag }}"
           version="${tag#v}"
-          url="https://github.com/1898andCo/tally/archive/refs/tags/${tag}.tar.gz"
 
-          sha256=$(curl -sL "$url" | sha256sum | cut -d' ' -f1)
+          mac_url="https://github.com/1898andCo/tally/releases/download/${tag}/tally-semantic-${tag}-aarch64-apple-darwin.tar.gz"
+          linux_url="https://github.com/1898andCo/tally/releases/download/${tag}/tally-semantic-${tag}-x86_64-unknown-linux-gnu.tar.gz"
+          mac_sha=$(curl -sL "${mac_url}.sha256" | cut -d' ' -f1)
+          linux_sha=$(curl -sL "${linux_url}.sha256" | cut -d' ' -f1)
 
           cat > /tmp/tally-semantic.rb <<FORMULA
           class TallySemantic < Formula
             desc "Git-backed findings tracker with semantic search (fastembed)"
             homepage "https://github.com/1898andCo/tally"
-            url "${url}"
-            sha256 "${sha256}"
+            version "${version}"
             license "Apache-2.0"
-            head "https://github.com/1898andCo/tally.git", branch: "develop"
+
+            conflicts_with "tally", because: "both install a 'tally' binary"
+
+            on_macos do
+              url "${mac_url}"
+              sha256 "${mac_sha}"
+            end
+
+            on_linux do
+              url "${linux_url}"
+              sha256 "${linux_sha}"
+            end
 
             livecheck do
-              url :stable
+              url "https://github.com/1898andCo/tally/releases/latest"
               regex(/^v?(\d+(?:\.\d+)+)$/i)
             end
 
-            depends_on "rust" => :build
-
             def install
-              system "cargo", "install", *std_cargo_args, "--features", "semantic-search"
+              bin.install "tally"
             end
 
             test do
