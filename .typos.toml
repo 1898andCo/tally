@@ -1,4 +1,5 @@
 [default.extend-words]
+actve = "actve"
 jsonl = "jsonl"
 rmcp = "rmcp"
 sarif = "sarif"
