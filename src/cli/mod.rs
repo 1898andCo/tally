@@ -461,9 +461,19 @@ pub enum RuleCommand {
     Search {
         /// Search query (matched against rule IDs, aliases, descriptions).
         query: String,
+        /// Search method: text (default) or semantic (requires --features semantic-search).
+        #[arg(long, default_value = "text")]
+        method: String,
         /// Max results (default: 10).
         #[arg(long, default_value = "10")]
         limit: usize,
+    },
+
+    /// Reindex rule embeddings for semantic search (requires --features semantic-search).
+    Reindex {
+        /// Compute embeddings for all rules.
+        #[arg(long)]
+        embeddings: bool,
     },
 
     /// Update rule fields.

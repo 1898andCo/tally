@@ -40,6 +40,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 
+# Optional: semantic search via local embeddings
+fastembed = { version = "5", optional = true }
+
+[features]
+default = []
+semantic-search = ["dep:fastembed"]
+
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/tally-v{ version }-{ target-triple }.tar.gz"
 pkg-fmt = "tgz"

@@ -159,7 +159,43 @@ pub fn handle_rule_list(
 /// # Errors
 ///
 /// Returns error if storage fails.
-pub fn handle_rule_search(store: &GitFindingsStore, query: &str, limit: usize) -> Result<()> {
+#[allow(clippy::too_many_lines)]
+pub fn handle_rule_search(
+    store: &GitFindingsStore,
+    query: &str,
+    method: &str,
+    limit: usize,
+) -> Result<()> {
+    // Semantic search path (feature-gated)
+    if method == "semantic" {
+        #[cfg(feature = "semantic-search")]
+        {
+            let mut rules = RuleStore::load_all_rules(store)?;
+            let results =
+                crate::registry::semantic::semantic_search(store, &mut rules, query, limit)?;
+            if results.is_empty() {
+                println!("No matching rules found for '{query}' (semantic).");
+            } else {
+                let json_results: Vec<_> = results
+                    .iter()
+                    .map(|(id, score)| {
+                        serde_json::json!({"id": id, "confidence": score, "method": "semantic"})
+                    })
+                    .collect();
+                print_json(&serde_json::to_value(json_results).unwrap_or_default());
+            }
+            return Ok(());
+        }
+        #[cfg(not(feature = "semantic-search"))]
+        {
+            return Err(TallyError::InvalidInput(
+                "Semantic search requires --features semantic-search. \
+                 Falling back to text search with: tally rule search <query>"
+                    .to_string(),
+            ));
+        }
+    }
+
     let rules = RuleStore::load_all_rules(store)?;
     let matcher = RuleMatcher::new(rules.clone());
 
@@ -563,4 +599,32 @@ struct SearchResult {
     status: String,
     finding_count: u64,
     aliases: Vec<String>,
+}
+
+/// Handle `tally rule reindex --embeddings`.
+///
+/// # Errors
+///
+/// Returns error if model initialization fails or storage fails.
+pub fn handle_rule_reindex(
+    #[allow(unused)] store: &GitFindingsStore,
+    embeddings: bool,
+) -> Result<()> {
+    if !embeddings {
+        println!("Nothing to reindex. Use --embeddings to compute rule embeddings.");
+        return Ok(());
+    }
+
+    #[cfg(feature = "semantic-search")]
+    {
+        let mut rules = RuleStore::load_all_rules(store)?;
+        let count = crate::registry::semantic::reindex_embeddings(store, &mut rules)?;
+        println!("Computed embeddings for {count} rules.");
+        Ok(())
+    }
+
+    #[cfg(not(feature = "semantic-search"))]
+    Err(TallyError::InvalidInput(
+        "Embedding reindex requires --features semantic-search".to_string(),
+    ))
 }

@@ -8,6 +8,8 @@ pub mod matcher;
 pub mod normalize;
 pub mod rule;
 pub mod scope;
+#[cfg(feature = "semantic-search")]
+pub mod semantic;
 pub mod stopwords;
 pub mod store;
 

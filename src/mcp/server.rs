@@ -1513,12 +1513,38 @@ impl TallyMcpServer {
         params: Parameters<SearchRulesInput>,
     ) -> Result<CallToolResult, McpError> {
         let store = self.store()?;
+        let query = &params.0.query;
+        let limit = params.0.limit.unwrap_or(10);
+        let method = params.0.method.as_deref().unwrap_or("text");
+
+        // Semantic search path (feature-gated)
+        #[cfg(feature = "semantic-search")]
+        if method == "semantic" {
+            let mut rules =
+                crate::registry::store::RuleStore::load_all_rules(&store).map_err(to_mcp_err)?;
+            let results =
+                crate::registry::semantic::semantic_search(&store, &mut rules, query, limit)
+                    .map_err(to_mcp_err)?;
+            let json_results: Vec<serde_json::Value> = results
+                .iter()
+                .map(|(id, score)| {
+                    serde_json::json!({"id": id, "confidence": score, "method": "semantic"})
+                })
+                .collect();
+            return Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&json_results).unwrap_or_default(),
+            )]));
+        }
+        #[cfg(not(feature = "semantic-search"))]
+        if method == "semantic" {
+            return Err(to_mcp_err(crate::error::TallyError::InvalidInput(
+                "Semantic search requires --features semantic-search".to_string(),
+            )));
+        }
+
         let rules =
             crate::registry::store::RuleStore::load_all_rules(&store).map_err(to_mcp_err)?;
         let matcher = crate::registry::RuleMatcher::new(rules.clone());
-
-        let query = &params.0.query;
-        let limit = params.0.limit.unwrap_or(10);
         let mut results = Vec::new();
 
         // Exact/alias check first

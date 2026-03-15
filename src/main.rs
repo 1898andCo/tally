@@ -271,9 +271,12 @@ fn handle_rule_command(action: cli::RuleCommand) -> tally_ng::error::Result<()> 
             status,
             format,
         } => cli::rule::handle_rule_list(&s, category.as_deref(), status.as_deref(), format),
-        cli::RuleCommand::Search { query, limit } => {
-            cli::rule::handle_rule_search(&s, &query, limit)
-        }
+        cli::RuleCommand::Search {
+            query,
+            method,
+            limit,
+        } => cli::rule::handle_rule_search(&s, &query, &method, limit),
+        cli::RuleCommand::Reindex { embeddings } => cli::rule::handle_rule_reindex(&s, embeddings),
         cli::RuleCommand::Update {
             id,
             name,
