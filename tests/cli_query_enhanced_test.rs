@@ -456,3 +456,485 @@ fn cli_query_help_mentions_filter() {
         .stdout(predicate::str::contains("--category"))
         .stdout(predicate::str::contains("TallyQL"));
 }
+
+// =============================================================================
+// --status multi-value
+// =============================================================================
+
+#[test]
+fn cli_status_multi_value() {
+    let tmp = setup_cli_repo();
+    init_with_findings(tmp.path());
+
+    // All findings are "open", so open,acknowledged should return all 3
+    tally()
+        .args([
+            "query",
+            "--status",
+            "open,acknowledged",
+            "--format",
+            "summary",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 findings"));
+}
+
+// =============================================================================
+// --not-status invalid value
+// =============================================================================
+
+#[test]
+fn cli_not_status_invalid_returns_error() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args(["query", "--not-status", "invalid_status"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid"));
+}
+
+// =============================================================================
+// --category no match
+// =============================================================================
+
+#[test]
+fn cli_category_no_match() {
+    let tmp = setup_cli_repo();
+    init_with_findings(tmp.path());
+
+    tally()
+        .args(["query", "--category", "nonexistent", "--format", "summary"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 findings"));
+}
+
+// =============================================================================
+// --sort title ascending (default direction for text fields)
+// =============================================================================
+
+#[test]
+fn cli_sort_by_title_asc() {
+    let tmp = setup_cli_repo();
+    init_with_findings(tmp.path());
+
+    let output = tally()
+        .args(["query", "--sort", "title"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run tally");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Default for title is asc: "missing test" < "unwrap bug" < "use clippy lint"
+    let miss_pos = stdout.find("missing test").expect("missing test");
+    let unwrap_pos = stdout.find("unwrap bug").expect("unwrap bug");
+    let clippy_pos = stdout.find("clippy lint").expect("clippy lint");
+    assert!(
+        miss_pos < unwrap_pos,
+        "missing test before unwrap bug (asc)"
+    );
+    assert!(
+        unwrap_pos < clippy_pos,
+        "unwrap bug before clippy lint (asc)"
+    );
+}
+
+// =============================================================================
+// --sort created_at default desc
+// =============================================================================
+
+#[test]
+fn cli_sort_created_at_default_desc() {
+    let tmp = setup_cli_repo();
+    init_with_findings(tmp.path());
+
+    // All created at roughly the same time, so just verify it doesn't error
+    tally()
+        .args(["query", "--sort", "created_at"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+}
+
+// =============================================================================
+// --since ISO 8601 date
+// =============================================================================
+
+#[test]
+fn cli_since_iso_date() {
+    let tmp = setup_cli_repo();
+    init_with_findings(tmp.path());
+
+    // All findings created now, so --since 2020-01-01 should return all
+    tally()
+        .args(["query", "--since", "2020-01-01", "--format", "summary"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 findings"));
+}
+
+// =============================================================================
+// --before invalid
+// =============================================================================
+
+#[test]
+fn cli_before_invalid_returns_error() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args(["query", "--before", "not-a-date"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid date/duration"));
+}
+
+// =============================================================================
+// Backward compat: --file and --tag
+// =============================================================================
+
+#[test]
+fn cli_existing_file_flag_unchanged() {
+    let tmp = setup_cli_repo();
+    init_with_findings(tmp.path());
+
+    tally()
+        .args(["query", "--file", "src/api"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("unwrap bug"))
+        .stdout(predicate::str::contains("missing test").not());
+}
+
+#[test]
+fn cli_existing_tag_flag_unchanged() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Record a finding with tags
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "1",
+            "--severity",
+            "critical",
+            "--title",
+            "tagged finding",
+            "--rule",
+            "test-rule",
+            "--tags",
+            "story:5.1,security",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args(["query", "--tag", "story:5.1"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tagged finding"));
+}
+
+// =============================================================================
+// --filter HAS/MISSING
+// =============================================================================
+
+#[test]
+fn cli_filter_has_expression() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Record one with suggested_fix, one without
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/a.rs",
+            "--line",
+            "1",
+            "--severity",
+            "critical",
+            "--title",
+            "with fix",
+            "--rule",
+            "r1",
+            "--suggested-fix",
+            "do this",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/b.rs",
+            "--line",
+            "1",
+            "--severity",
+            "important",
+            "--title",
+            "without fix",
+            "--rule",
+            "r2",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args(["query", "--filter", "HAS suggested_fix"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("with fix"))
+        .stdout(predicate::str::contains("without fix").not());
+}
+
+// =============================================================================
+// --filter IN list
+// =============================================================================
+
+#[test]
+fn cli_filter_in_list() {
+    let tmp = setup_cli_repo();
+    init_with_findings(tmp.path());
+
+    tally()
+        .args(["query", "--filter", "severity IN (critical, important)"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("unwrap bug"))
+        .stdout(predicate::str::contains("missing test"))
+        .stdout(predicate::str::contains("clippy lint").not());
+}
+
+// =============================================================================
+// --filter combined with --sort
+// =============================================================================
+
+#[test]
+fn cli_filter_with_sort() {
+    let tmp = setup_cli_repo();
+    init_with_findings(tmp.path());
+
+    let output = tally()
+        .args([
+            "query",
+            "--filter",
+            "severity IN (critical, important)",
+            "--sort",
+            "severity",
+            "--sort-dir",
+            "desc",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("run tally");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let crit_pos = stdout.find("unwrap bug").expect("critical");
+    let imp_pos = stdout.find("missing test").expect("important");
+    assert!(
+        crit_pos < imp_pos,
+        "critical before important after sort desc"
+    );
+    // suggestion should not be present
+    assert!(!stdout.contains("clippy lint"));
+}
+
+// =============================================================================
+// Multiple --sort fields
+// =============================================================================
+
+#[test]
+fn cli_multi_sort_fields() {
+    let tmp = setup_cli_repo();
+    init_with_findings(tmp.path());
+
+    // Sort by severity desc, then title asc — should not error
+    tally()
+        .args([
+            "query",
+            "--sort",
+            "severity",
+            "--sort",
+            "title",
+            "--sort-dir",
+            "desc",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+}
+
+// =============================================================================
+// E2E: record → tag → query with --filter tag expression
+// =============================================================================
+
+#[test]
+fn e2e_record_tag_query_filter() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Record a finding
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/main.rs",
+            "--line",
+            "42",
+            "--severity",
+            "critical",
+            "--title",
+            "tagged issue",
+            "--rule",
+            "test-rule",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Get the short ID from query output
+    let output = tally()
+        .args(["query", "--format", "json"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("query");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("tagged issue"));
+
+    // Add a tag
+    tally()
+        .args(["tag", "C1", "--add", "story:5.1"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Query using TallyQL tag filter
+    tally()
+        .args(["query", "--filter", r#"tag CONTAINS "story:5.1""#])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tagged issue"));
+}
+
+// =============================================================================
+// E2E: record → update status → query --not-status
+// =============================================================================
+
+#[test]
+fn e2e_lifecycle_then_not_status_query() {
+    let tmp = setup_cli_repo();
+    tally()
+        .arg("init")
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Record two findings
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/a.rs",
+            "--line",
+            "1",
+            "--severity",
+            "critical",
+            "--title",
+            "will close",
+            "--rule",
+            "r1",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    tally()
+        .args([
+            "record",
+            "--file",
+            "src/b.rs",
+            "--line",
+            "1",
+            "--severity",
+            "important",
+            "--title",
+            "stays open",
+            "--rule",
+            "r2",
+        ])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Transition first to acknowledged → in_progress → resolved → closed
+    tally()
+        .args(["update", "C1", "--status", "acknowledged"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    tally()
+        .args(["update", "C1", "--status", "in_progress"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    tally()
+        .args(["update", "C1", "--status", "resolved"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+    tally()
+        .args(["update", "C1", "--status", "closed"])
+        .current_dir(tmp.path())
+        .assert()
+        .success();
+
+    // Query excluding closed
+    tally()
+        .args(["query", "--not-status", "closed"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("stays open"))
+        .stdout(predicate::str::contains("will close").not());
+}
