@@ -242,6 +242,13 @@ async fn mcp_unit_query_empty() {
         rule: None,
         limit: None,
         tag: None,
+        filter: None,
+        sort: None,
+        since: None,
+        before: None,
+        agent: None,
+        category: None,
+        text: None,
     };
     let result = server
         .query_findings(Parameters(input))
@@ -281,6 +288,13 @@ async fn mcp_unit_query_with_severity_filter() {
         rule: None,
         limit: None,
         tag: None,
+        filter: None,
+        sort: None,
+        since: None,
+        before: None,
+        agent: None,
+        category: None,
+        text: None,
     };
     let result = server
         .query_findings(Parameters(input))
@@ -323,6 +337,13 @@ async fn mcp_unit_query_with_file_filter() {
         rule: None,
         limit: None,
         tag: None,
+        filter: None,
+        sort: None,
+        since: None,
+        before: None,
+        agent: None,
+        category: None,
+        text: None,
     };
     let result = server
         .query_findings(Parameters(input))
@@ -365,6 +386,13 @@ async fn mcp_unit_query_with_rule_filter() {
         rule: Some("sql-injection".into()),
         limit: None,
         tag: None,
+        filter: None,
+        sort: None,
+        since: None,
+        before: None,
+        agent: None,
+        category: None,
+        text: None,
     };
     let result = server
         .query_findings(Parameters(input))
@@ -399,6 +427,13 @@ async fn mcp_unit_query_with_limit() {
         rule: None,
         limit: Some(3),
         tag: None,
+        filter: None,
+        sort: None,
+        since: None,
+        before: None,
+        agent: None,
+        category: None,
+        text: None,
     };
     let result = server
         .query_findings(Parameters(input))
@@ -1882,6 +1917,13 @@ async fn mcp_unit_query_with_tag_filter() {
             rule: None,
             limit: None,
             tag: Some("story:1.21".into()),
+            filter: None,
+            sort: None,
+            since: None,
+            before: None,
+            agent: None,
+            category: None,
+            text: None,
         }))
         .await
         .expect("query");
@@ -1995,6 +2037,13 @@ async fn mcp_unit_import_finding_gets_empty_notes_and_edit_history() {
             rule: None,
             limit: None,
             tag: None,
+            filter: None,
+            sort: None,
+            since: None,
+            before: None,
+            agent: None,
+            category: None,
+            text: None,
         }))
         .await
         .expect("query");
@@ -2041,6 +2090,13 @@ async fn mcp_unit_rebuild_index_includes_tags() {
             rule: None,
             limit: None,
             tag: Some("story:1.21".into()),
+            filter: None,
+            sort: None,
+            since: None,
+            before: None,
+            agent: None,
+            category: None,
+            text: None,
         }))
         .await
         .expect("query");
@@ -2126,4 +2182,233 @@ async fn mcp_unit_remove_tag_on_finding_with_no_tags() {
     let json = extract_tool_json(&result.expect("ok"));
     let tags = json["tags"].as_array().expect("tags");
     assert!(tags.is_empty());
+}
+
+// =============================================================================
+// TallyQL query via MCP
+// =============================================================================
+
+#[tokio::test]
+async fn mcp_unit_query_with_filter_expression() {
+    let (_tmp, server) = setup_mcp();
+    // Record two findings with different severities
+    record_finding_with_severity(&server, "critical").await;
+    record_finding_with_severity_and_file(&server, "suggestion", "tests/foo.rs").await;
+
+    let result = server
+        .query_findings(Parameters(QueryFindingsInput {
+            status: None,
+            severity: None,
+            file: None,
+            rule: None,
+            limit: None,
+            tag: None,
+            filter: Some("severity = critical".into()),
+            sort: None,
+            since: None,
+            before: None,
+            agent: None,
+            category: None,
+            text: None,
+        }))
+        .await
+        .expect("query with filter");
+    let json = extract_tool_json(&result);
+    let findings = json.as_array().expect("array");
+    assert_eq!(findings.len(), 1);
+}
+
+#[tokio::test]
+async fn mcp_unit_query_with_sort() {
+    let (_tmp, server) = setup_mcp();
+    record_finding_with_severity(&server, "suggestion").await;
+    record_finding_with_severity(&server, "critical").await;
+
+    let result = server
+        .query_findings(Parameters(QueryFindingsInput {
+            status: None,
+            severity: None,
+            file: None,
+            rule: None,
+            limit: None,
+            tag: None,
+            filter: None,
+            sort: Some("-severity".into()),
+            since: None,
+            before: None,
+            agent: None,
+            category: None,
+            text: None,
+        }))
+        .await
+        .expect("query with sort");
+    let json = extract_tool_json(&result);
+    let findings = json.as_array().expect("array");
+    assert_eq!(findings.len(), 2);
+    // First should be critical (desc sort)
+    assert_eq!(findings[0]["severity"], "critical");
+}
+
+#[tokio::test]
+async fn mcp_unit_query_with_text_search() {
+    let (_tmp, server) = setup_mcp();
+    record_and_get_uuid(&server).await; // title: "test finding"
+
+    let result = server
+        .query_findings(Parameters(QueryFindingsInput {
+            status: None,
+            severity: None,
+            file: None,
+            rule: None,
+            limit: None,
+            tag: None,
+            filter: None,
+            sort: None,
+            since: None,
+            before: None,
+            agent: None,
+            category: None,
+            text: Some("test finding".into()),
+        }))
+        .await
+        .expect("query with text");
+    let json = extract_tool_json(&result);
+    let findings = json.as_array().expect("array");
+    assert_eq!(findings.len(), 1);
+}
+
+#[tokio::test]
+async fn mcp_unit_query_with_since() {
+    let (_tmp, server) = setup_mcp();
+    record_and_get_uuid(&server).await;
+
+    // Since 1 hour ago — should include the just-created finding
+    let result = server
+        .query_findings(Parameters(QueryFindingsInput {
+            status: None,
+            severity: None,
+            file: None,
+            rule: None,
+            limit: None,
+            tag: None,
+            filter: None,
+            sort: None,
+            since: Some("1h".into()),
+            before: None,
+            agent: None,
+            category: None,
+            text: None,
+        }))
+        .await
+        .expect("query with since");
+    let json = extract_tool_json(&result);
+    let findings = json.as_array().expect("array");
+    assert_eq!(findings.len(), 1);
+}
+
+#[tokio::test]
+async fn mcp_unit_query_filter_parse_error() {
+    let (_tmp, server) = setup_mcp();
+
+    let result = server
+        .query_findings(Parameters(QueryFindingsInput {
+            status: None,
+            severity: None,
+            file: None,
+            rule: None,
+            limit: None,
+            tag: None,
+            filter: Some("foo = bar".into()),
+            sort: None,
+            since: None,
+            before: None,
+            agent: None,
+            category: None,
+            text: None,
+        }))
+        .await;
+    assert!(result.is_err(), "invalid TallyQL should return MCP error");
+}
+
+#[tokio::test]
+async fn mcp_unit_query_invalid_sort_field() {
+    let (_tmp, server) = setup_mcp();
+
+    let result = server
+        .query_findings(Parameters(QueryFindingsInput {
+            status: None,
+            severity: None,
+            file: None,
+            rule: None,
+            limit: None,
+            tag: None,
+            filter: None,
+            sort: Some("nonexistent".into()),
+            since: None,
+            before: None,
+            agent: None,
+            category: None,
+            text: None,
+        }))
+        .await;
+    assert!(
+        result.is_err(),
+        "invalid sort field should return MCP error"
+    );
+}
+
+/// Helper: record a finding with a specific severity.
+async fn record_finding_with_severity(server: &TallyMcpServer, severity: &str) {
+    server
+        .record_finding(Parameters(RecordFindingInput {
+            file_path: "src/lib.rs".into(),
+            line_start: 1,
+            line_end: None,
+            severity: severity.into(),
+            title: format!("{severity} finding"),
+            rule_id: format!("rule-{severity}"),
+            description: None,
+            tags: None,
+            agent: None,
+            session_id: None,
+            locations: None,
+            related_to: None,
+            relationship_type: None,
+            category: None,
+            suggested_fix: None,
+            evidence: None,
+            pr_number: None,
+        }))
+        .await
+        .expect("record finding");
+}
+
+/// Helper: record a finding with severity and specific file.
+async fn record_finding_with_severity_and_file(
+    server: &TallyMcpServer,
+    severity: &str,
+    file: &str,
+) {
+    server
+        .record_finding(Parameters(RecordFindingInput {
+            file_path: file.into(),
+            line_start: 1,
+            line_end: None,
+            severity: severity.into(),
+            title: format!("{severity} finding in {file}"),
+            rule_id: format!("rule-{severity}-{file}"),
+            description: None,
+            tags: None,
+            agent: None,
+            session_id: None,
+            locations: None,
+            related_to: None,
+            relationship_type: None,
+            category: None,
+            suggested_fix: None,
+            evidence: None,
+            pr_number: None,
+        }))
+        .await
+        .expect("record finding");
 }
