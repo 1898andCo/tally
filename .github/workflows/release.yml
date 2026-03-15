@@ -214,7 +214,7 @@ jobs:
           fetch-depth: 0
           # PAT required to push to branch-protected main
           # GITHUB_TOKEN cannot bypass branch protection rulesets
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          token: ${{ secrets.RELEASE_PAT }}
 
       - name: Fast-forward main to develop
         run: |
