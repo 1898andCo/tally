@@ -232,5 +232,83 @@ fn run(cli: Cli) -> tally_ng::error::Result<()> {
             cli::handle_mcp_capabilities();
             Ok(())
         }
+        Command::Rule { action } => handle_rule_command(action),
+    }
+}
+
+fn handle_rule_command(action: cli::RuleCommand) -> tally_ng::error::Result<()> {
+    let s = store()?;
+    match action {
+        cli::RuleCommand::Create {
+            id,
+            name,
+            description,
+            category,
+            severity_hint,
+            aliases,
+            cwe_ids,
+            scope_include,
+            scope_exclude,
+            tags,
+        } => cli::rule::handle_rule_create(
+            &s,
+            &id,
+            &name,
+            &description,
+            category.as_deref(),
+            severity_hint.as_deref(),
+            &aliases,
+            &cwe_ids,
+            &scope_include,
+            &scope_exclude,
+            &tags,
+        ),
+        cli::RuleCommand::Get { id } => cli::rule::handle_rule_get(&s, &id),
+        cli::RuleCommand::List {
+            category,
+            status,
+            format,
+        } => cli::rule::handle_rule_list(&s, category.as_deref(), status.as_deref(), format),
+        cli::RuleCommand::Search { query, limit } => {
+            cli::rule::handle_rule_search(&s, &query, limit)
+        }
+        cli::RuleCommand::Update {
+            id,
+            name,
+            description,
+            status,
+            add_alias,
+            remove_alias,
+            add_cwe,
+            scope_include,
+            scope_exclude,
+        } => cli::rule::handle_rule_update(
+            &s,
+            &id,
+            name.as_deref(),
+            description.as_deref(),
+            status.as_deref(),
+            &add_alias,
+            &remove_alias,
+            &add_cwe,
+            &scope_include,
+            &scope_exclude,
+        ),
+        cli::RuleCommand::Delete { id, reason } => cli::rule::handle_rule_delete(&s, &id, &reason),
+        cli::RuleCommand::AddExample {
+            id,
+            example_type,
+            language,
+            code,
+            explanation,
+        } => cli::rule::handle_rule_add_example(
+            &s,
+            &id,
+            &example_type,
+            &language,
+            &code,
+            &explanation,
+        ),
+        cli::RuleCommand::Migrate => cli::rule::handle_rule_migrate(&s),
     }
 }
