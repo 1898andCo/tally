@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-03-15
+
+### Bug Fixes
+
+- *(ci)* Use RELEASE_PAT for sync-main (scoped to tally repo)
+
+### Documentation
+
+- Add TallyQL syntax reference and update query documentation
+
+### Features
+
+- *(query)* Add TallyQL module foundation — AST, error types, field registry
+- *(query)* Implement TallyQL parser with Chumsky 0.10
+- *(query)* Implement TallyQL AST evaluator with property tests
+- *(query)* Wire TallyQL + enhanced filters into CLI
+- *(query)* Add TallyQL and enhanced filters to MCP query_findings tool
+
+### Testing
+
+- *(query)* Add 48 foundation tests for field registry, filters, and sorting
+- *(query)* Add 26 parser tests + fix IN list minimum
+- *(query)* Add 27 evaluator tests + 9 E2E parse-to-eval pipeline tests
+- *(query)* Add 15 CLI tests + 2 E2E lifecycle tests for full coverage
+
 ## [0.5.1] - 2026-03-15
 
 ### Bug Fixes
