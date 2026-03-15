@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.1] - 2026-03-15
+
+### Features
+
+- *(mcp)* Add TallyQL syntax reference as MCP resource
+
 ## [0.6.0] - 2026-03-15
 
 ### Bug Fixes
