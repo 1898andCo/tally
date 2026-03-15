@@ -96,17 +96,27 @@ clean:
 # Coverage
 # ---------------------------------------------------------------------------
 
+# Coverage recipes export LLVM tool paths explicitly because Homebrew Rust
+# installs llvm-tools-preview in a location cargo-llvm-cov can't auto-detect.
+_llvm-env := ```
+    sysroot=$(rustup run stable rustc --print sysroot 2>/dev/null || true)
+    if [ -n "$sysroot" ]; then
+        bin="$sysroot/lib/rustlib/$(rustc -vV | grep host | cut -d' ' -f2)/bin"
+        [ -f "$bin/llvm-cov" ] && echo "LLVM_COV=$bin/llvm-cov LLVM_PROFDATA=$bin/llvm-profdata" || echo ""
+    fi
+```
+
 [group('test')]
 coverage: (_require "cargo-llvm-cov" "cargo install cargo-llvm-cov --locked")
-    cargo llvm-cov --all-targets --summary-only
+    {{ _llvm-env }} cargo llvm-cov --all-targets --summary-only
 
 [group('test')]
 coverage-html: (_require "cargo-llvm-cov" "cargo install cargo-llvm-cov --locked")
-    cargo llvm-cov --all-targets --html --open
+    {{ _llvm-env }} cargo llvm-cov --all-targets --html --open
 
 [group('test')]
 coverage-json: (_require "cargo-llvm-cov" "cargo install cargo-llvm-cov --locked")
-    cargo llvm-cov --all-targets --codecov --output-path codecov.json
+    {{ _llvm-env }} cargo llvm-cov --all-targets --codecov --output-path codecov.json
 
 # ---------------------------------------------------------------------------
 # CI
@@ -128,7 +138,7 @@ setup:
     rustup component add clippy
     rustup toolchain install nightly --component rustfmt
     cargo install cargo-watch cargo-deny cargo-nextest cargo-llvm-cov git-cliff --locked
-    rustup component add llvm-tools-preview
+    rustup component add llvm-tools-preview --toolchain stable
     if command -v brew &>/dev/null; then
         brew install taplo lefthook
     else
