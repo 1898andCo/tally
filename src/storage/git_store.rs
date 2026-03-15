@@ -145,6 +145,8 @@ pub struct SyncResult {
     pub merged: bool,
     /// Whether local data was pushed.
     pub pushed: bool,
+    /// Number of rule conflicts resolved via semantic merge.
+    pub rules_merged: usize,
 }
 
 /// Git-backed findings store.
@@ -483,11 +485,24 @@ impl GitFindingsStore {
                             .merge_trees(&base_tree, &local_tree, &remote_tree, None)?;
 
                     if merge_index.has_conflicts() {
-                        return Err(TallyError::Git(git2::Error::from_str(
-                            "Merge conflict on findings-data branch. \
-                             This should not happen with one-file-per-finding. \
-                             Resolve manually with: git checkout findings-data && git merge origin/findings-data",
-                        )));
+                        // Try to resolve rule conflicts semantically
+                        let rules_merged = resolve_rule_conflicts(&self.repo, &mut merge_index)?;
+                        if rules_merged > 0 {
+                            tracing::info!(
+                                rules_merged,
+                                "Resolved rule conflicts via semantic merge"
+                            );
+                        }
+
+                        // If conflicts remain after rule resolution, they're
+                        // on findings — that's unexpected
+                        if merge_index.has_conflicts() {
+                            return Err(TallyError::Git(git2::Error::from_str(
+                                "Merge conflict on findings-data branch. \
+                                 Rule conflicts were resolved but finding conflicts remain. \
+                                 Resolve manually with: git checkout findings-data && git merge origin/findings-data",
+                            )));
+                        }
                     }
 
                     let merged_tree_oid = merge_index.write_tree_to(&self.repo)?;
@@ -518,6 +533,7 @@ impl GitFindingsStore {
                         fetched: remote_commit.is_some(),
                         merged,
                         pushed: true,
+                        rules_merged: 0,
                     });
                 }
                 Err(e) if attempt < MAX_LOCK_RETRIES - 1 => {
@@ -782,4 +798,176 @@ impl GitFindingsStore {
             .or_else(|_| Signature::now("tally", "tally@localhost"))
             .map_err(Into::into)
     }
+}
+
+/// Resolve conflicts on `rules/*.json` paths via semantic merge.
+///
+/// Returns the number of rule conflicts resolved. Findings conflicts
+/// (paths under `findings/`) are left as-is for the caller to handle.
+fn resolve_rule_conflicts(repo: &Repository, merge_index: &mut git2::Index) -> Result<usize> {
+    let conflicts: Vec<_> = merge_index
+        .conflicts()?
+        .collect::<std::result::Result<_, _>>()?;
+    let mut resolved = 0;
+
+    for conflict in &conflicts {
+        let path = conflict
+            .our
+            .as_ref()
+            .or(conflict.their.as_ref())
+            .and_then(|e| std::str::from_utf8(&e.path).ok())
+            .unwrap_or("");
+
+        // Only handle rules/ conflicts
+        if !path.starts_with("rules/") || Path::new(path).extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+
+        let ours_blob = conflict
+            .our
+            .as_ref()
+            .and_then(|e| repo.find_blob(e.id).ok());
+        let theirs_blob = conflict
+            .their
+            .as_ref()
+            .and_then(|e| repo.find_blob(e.id).ok());
+
+        let (Some(ours), Some(theirs)) = (ours_blob, theirs_blob) else {
+            continue; // Can't resolve without both sides
+        };
+
+        match merge_rule_json(ours.content(), theirs.content()) {
+            Ok(merged_json) => {
+                let blob_oid = repo.blob(&merged_json)?;
+
+                // Get path bytes from the "our" entry for the resolved IndexEntry
+                let our_entry = conflict.our.as_ref().expect("our entry exists");
+                let path_bytes = our_entry.path.clone();
+
+                // Construct a new IndexEntry (doesn't impl Clone)
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                let index_time = git2::IndexTime::new(
+                    i32::try_from(now.as_secs()).unwrap_or(0),
+                    now.subsec_nanos(),
+                );
+
+                #[allow(clippy::cast_possible_truncation)]
+                let resolved_entry = git2::IndexEntry {
+                    ctime: index_time,
+                    mtime: index_time,
+                    dev: 0,
+                    ino: 0,
+                    mode: 0o100_644, // Regular file
+                    uid: 0,
+                    gid: 0,
+                    file_size: merged_json.len() as u32,
+                    id: blob_oid,
+                    flags: 0, // Stage 0 = resolved
+                    flags_extended: 0,
+                    path: path_bytes,
+                };
+
+                merge_index.conflict_remove(Path::new(path)).map_err(|e| {
+                    TallyError::Git(git2::Error::from_str(&format!(
+                        "Failed to remove conflict for {path}: {e}"
+                    )))
+                })?;
+                merge_index.add(&resolved_entry)?;
+                resolved += 1;
+                tracing::info!(path, "Resolved rule conflict via semantic merge");
+            }
+            Err(e) => {
+                tracing::warn!(path, error = %e, "Failed to merge rule, leaving conflict");
+            }
+        }
+    }
+
+    Ok(resolved)
+}
+
+/// Semantic merge of two rule JSON blobs.
+///
+/// Merge strategy:
+/// - Union arrays (aliases, `cwe_ids`, tags, references, `related_rules`)
+/// - Longest description
+/// - Earliest `created_at`
+/// - Latest `updated_at`
+/// - Max `finding_count`
+/// - Most promoted status (active > experimental > deprecated)
+/// - Take ours for category and scope (warn if differ)
+/// - Null embedding (recompute on next access)
+fn merge_rule_json(ours: &[u8], theirs: &[u8]) -> Result<Vec<u8>> {
+    let mut our_rule: crate::registry::rule::Rule =
+        serde_json::from_slice(ours).map_err(TallyError::Serialization)?;
+    let their_rule: crate::registry::rule::Rule =
+        serde_json::from_slice(theirs).map_err(TallyError::Serialization)?;
+
+    // Longest description
+    if their_rule.description.len() > our_rule.description.len() {
+        our_rule.description = their_rule.description;
+    }
+
+    // Union arrays
+    for alias in &their_rule.aliases {
+        if !our_rule.aliases.contains(alias) {
+            our_rule.aliases.push(alias.clone());
+        }
+    }
+    for cwe in &their_rule.cwe_ids {
+        if !our_rule.cwe_ids.contains(cwe) {
+            our_rule.cwe_ids.push(cwe.clone());
+        }
+    }
+    for tag in &their_rule.tags {
+        if !our_rule.tags.contains(tag) {
+            our_rule.tags.push(tag.clone());
+        }
+    }
+    for reference in &their_rule.references {
+        if !our_rule.references.contains(reference) {
+            our_rule.references.push(reference.clone());
+        }
+    }
+    for related in &their_rule.related_rules {
+        if !our_rule.related_rules.contains(related) {
+            our_rule.related_rules.push(related.clone());
+        }
+    }
+
+    // Earliest created_at
+    if their_rule.created_at < our_rule.created_at {
+        our_rule.created_at = their_rule.created_at;
+        our_rule.created_by = their_rule.created_by;
+    }
+
+    // Latest updated_at
+    if their_rule.updated_at > our_rule.updated_at {
+        our_rule.updated_at = their_rule.updated_at;
+    }
+
+    // Max finding_count
+    our_rule.finding_count = our_rule.finding_count.max(their_rule.finding_count);
+
+    // Most promoted status
+    if their_rule.status.promotion_rank() > our_rule.status.promotion_rank() {
+        our_rule.status = their_rule.status;
+    }
+
+    // Warn if scope differs (take ours)
+    if our_rule.scope.is_some() != their_rule.scope.is_some() {
+        tracing::warn!(
+            rule_id = %our_rule.id,
+            "Rule scope differs between clones — taking local scope"
+        );
+    }
+
+    // Null embedding (recompute on next access)
+    our_rule.embedding = None;
+    our_rule.embedding_model = None;
+
+    serde_json::to_string_pretty(&our_rule)
+        .map(String::into_bytes)
+        .map_err(TallyError::Serialization)
 }
