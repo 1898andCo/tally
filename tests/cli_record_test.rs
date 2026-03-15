@@ -696,7 +696,7 @@ fn cli_record_batch_partial_success() {
     let batch = tmp.path().join("batch.jsonl");
     std::fs::write(
         &batch,
-        r#"{"file_path":"a.rs","line_start":1,"severity":"critical","title":"ok","rule_id":"r"}
+        r#"{"file_path":"a.rs","line_start":1,"severity":"critical","title":"ok","rule_id":"r1"}
 {"bad json line
 {"file_path":"c.rs","line_start":3,"severity":"important","title":"ok","rule_id":"r2"}
 "#,
@@ -999,7 +999,7 @@ fn cli_parse_location_flag_invalid_line() {
             "--title",
             "t",
             "--rule",
-            "r",
+            "r1",
             "--location",
             "file.rs:abc:primary",
         ])
@@ -1031,7 +1031,7 @@ fn cli_parse_location_flag_invalid_role() {
             "--title",
             "t",
             "--rule",
-            "r",
+            "r1",
             "--location",
             "file.rs:42:invalid",
         ])
@@ -1063,7 +1063,7 @@ fn cli_parse_location_flag_wrong_part_count() {
             "--title",
             "t",
             "--rule",
-            "r",
+            "r1",
             "--location",
             "file.rs",
         ])

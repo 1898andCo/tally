@@ -124,6 +124,7 @@ fn process_batch_line(
                 uuid: new_uuid,
                 content_fingerprint: fingerprint,
                 rule_id: entry.rule_id,
+                original_rule_id: None,
                 locations: vec![location],
                 severity,
                 category: String::new(),

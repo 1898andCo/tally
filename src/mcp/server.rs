@@ -329,6 +329,130 @@ pub struct BatchFindingInput {
     pub session_id: Option<String>,
 }
 
+// --- Rule Registry Input Types ---
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateRuleInput {
+    #[schemars(description = "Rule ID (lowercase alphanumeric with hyphens, 2-64 chars)")]
+    pub rule_id: String,
+    #[schemars(description = "Human-readable name")]
+    pub name: String,
+    #[schemars(description = "Description of what this rule checks")]
+    pub description: String,
+    #[schemars(description = "Domain category (e.g., 'safety', 'security')")]
+    pub category: Option<String>,
+    #[schemars(description = "Suggested severity for findings")]
+    pub severity_hint: Option<String>,
+    #[schemars(description = "Alternative names that map to this rule")]
+    pub aliases: Option<Vec<String>>,
+    #[schemars(description = "CWE identifiers")]
+    pub cwe_ids: Option<Vec<String>>,
+    #[schemars(description = "Tags for searchability")]
+    pub tags: Option<Vec<String>>,
+    #[schemars(description = "Scope include glob patterns")]
+    pub scope_include: Option<Vec<String>>,
+    #[schemars(description = "Scope exclude glob patterns")]
+    pub scope_exclude: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetRuleInput {
+    #[schemars(description = "Rule ID to retrieve")]
+    pub rule_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchRulesInput {
+    #[schemars(description = "Search query text (matched against IDs, aliases, descriptions)")]
+    pub query: String,
+    #[schemars(
+        description = "Search method: 'text' (default) or 'semantic' (requires feature flag)"
+    )]
+    pub method: Option<String>,
+    #[schemars(description = "Max results (default: 10)")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListRulesInput {
+    #[schemars(description = "Filter by category")]
+    pub category: Option<String>,
+    #[schemars(description = "Filter by status (active, deprecated, experimental)")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateRuleInput {
+    #[schemars(description = "Rule ID to update")]
+    pub rule_id: String,
+    #[schemars(description = "New name")]
+    pub name: Option<String>,
+    #[schemars(description = "New description")]
+    pub description: Option<String>,
+    #[schemars(description = "New status (active, deprecated, experimental)")]
+    pub status: Option<String>,
+    #[schemars(description = "Aliases to add")]
+    pub add_aliases: Option<Vec<String>>,
+    #[schemars(description = "Aliases to remove")]
+    pub remove_aliases: Option<Vec<String>>,
+    #[schemars(description = "CWE IDs to add")]
+    pub add_cwe: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteRuleInput {
+    #[schemars(description = "Rule ID to deprecate")]
+    pub rule_id: String,
+    #[schemars(description = "Reason for deprecation")]
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AddRuleExampleInput {
+    #[schemars(description = "Rule ID")]
+    pub rule_id: String,
+    #[schemars(description = "Example type: 'bad' or 'good'")]
+    pub example_type: String,
+    #[schemars(description = "Programming language")]
+    pub language: String,
+    #[schemars(description = "Code snippet")]
+    pub code: String,
+    #[schemars(description = "Explanation of why this is bad/good")]
+    pub explanation: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MigrateRulesInput {
+    #[schemars(
+        description = "Dry run — show what would be migrated without registering. Default: false"
+    )]
+    pub dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RebuildIndexInput {
+    #[schemars(
+        description = "Also recalculate finding_count for each rule in the registry. Default: false"
+    )]
+    pub include_rules: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateBatchStatusInput {
+    #[schemars(
+        description = "Finding identifiers — full UUIDs or session short IDs (e.g., C1, I2, S3, TD1)"
+    )]
+    pub finding_ids: Vec<String>,
+    #[schemars(
+        description = "Target lifecycle status for all findings. One of: open, acknowledged, in_progress, resolved, false_positive, wont_fix, deferred, suppressed, reopened, closed"
+    )]
+    pub status: String,
+    #[schemars(description = "Reason for the status change (applied to all findings)")]
+    pub reason: Option<String>,
+    #[schemars(description = "Agent identifier for audit trail (default: mcp-client)")]
+    pub agent: Option<String>,
+}
+
 // --- Output Type ---
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -366,6 +490,18 @@ struct ToolOutput {
     distance: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rule_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_rule_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    normalized_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    similar_rules: Option<Vec<crate::registry::SimilarRule>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_merged: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope_warning: Option<String>,
 }
 
 // --- Constructor ---
@@ -461,17 +597,62 @@ impl TallyMcpServer {
             vec![primary_location.clone()]
         };
 
-        let fingerprint = compute_fingerprint(&primary_location, &input.rule_id);
+        let agent = input.agent.as_deref().unwrap_or("mcp-client");
+
+        // Resolve rule ID through registry matching pipeline
+        let rules = crate::registry::store::RuleStore::load_all_rules(&store).unwrap_or_default();
+        let matcher = crate::registry::RuleMatcher::new(rules);
+        let desc = input.description.as_deref();
+        let match_result = matcher
+            .resolve(&input.rule_id, None, desc)
+            .map_err(to_mcp_err)?;
+
+        let canonical_rule_id = match_result.canonical_id.clone();
+        let original_rule_id = {
+            let normalized = crate::registry::normalize_rule_id(&input.rule_id)
+                .unwrap_or_else(|_| input.rule_id.clone());
+            (normalized != canonical_rule_id).then(|| input.rule_id.clone())
+        };
+
+        // Auto-register new rules
+        if match_result.method == "auto_registered" {
+            let mut auto_rule = crate::registry::Rule::new(
+                canonical_rule_id.clone(),
+                canonical_rule_id.clone(),
+                input.description.clone().unwrap_or_default(),
+            );
+            auto_rule.status = crate::registry::RuleStatus::Experimental;
+            auto_rule.category = input.category.clone().unwrap_or_default();
+            auto_rule.severity_hint.clone_from(&input.severity);
+            auto_rule.created_by = agent.to_string();
+            if let Err(e) = crate::registry::store::RuleStore::save_rule(&store, &auto_rule) {
+                tracing::warn!(error = %e, "Failed to auto-register rule");
+            }
+        }
+
+        let normalized_by = (match_result.method != "exact").then(|| match_result.method.clone());
+        let similar_rules = if match_result.similar_rules.is_empty() {
+            None
+        } else {
+            Some(match_result.similar_rules.clone())
+        };
+
+        // Check scope
+        let scope_warning = matcher.get_rule(&canonical_rule_id).and_then(|rule| {
+            crate::registry::check_scope(rule.scope.as_ref(), &rule.id, &input.file_path)
+        });
+
+        // Use canonical rule ID for fingerprint
+        let fingerprint = compute_fingerprint(&primary_location, &canonical_rule_id);
         let existing = store.load_all().unwrap_or_default();
         let resolver = FindingIdentityResolver::from_findings(&existing);
         let resolution = resolver.resolve(
             &fingerprint,
             &input.file_path,
             input.line_start,
-            &input.rule_id,
+            &canonical_rule_id,
             5,
         );
-        let agent = input.agent.as_deref().unwrap_or("mcp-client");
         let (repo_id, branch, commit_sha) = store.git_context();
         let ctx = GitContext {
             repo_id,
@@ -480,14 +661,41 @@ impl TallyMcpServer {
         };
 
         let output = match resolution {
-            IdentityResolution::ExistingFinding { uuid } => ToolOutput {
-                status: "deduplicated".into(),
-                uuid: Some(uuid.to_string()),
-                message: None,
-                related_to: None,
-                distance: None,
-                expires_at: None,
-            },
+            IdentityResolution::ExistingFinding { uuid } => {
+                // Fix: append agent to discovered_by on dedup (match CLI behavior)
+                let mut finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
+                let session_id = input.session_id.clone().unwrap_or_default();
+                let already_recorded = finding
+                    .discovered_by
+                    .iter()
+                    .any(|a| a.agent_id == agent && a.session_id == session_id);
+
+                if !already_recorded {
+                    finding.discovered_by.push(AgentRecord {
+                        agent_id: agent.to_string(),
+                        session_id: session_id.clone(),
+                        detected_at: Utc::now(),
+                        session_short_id: None,
+                    });
+                    finding.updated_at = Utc::now();
+                    store.save_finding(&finding).map_err(to_mcp_err)?;
+                }
+
+                ToolOutput {
+                    status: "deduplicated".into(),
+                    uuid: Some(uuid.to_string()),
+                    message: None,
+                    related_to: None,
+                    distance: None,
+                    expires_at: None,
+                    rule_id: Some(canonical_rule_id.clone()),
+                    original_rule_id: original_rule_id.clone(),
+                    normalized_by: normalized_by.clone(),
+                    similar_rules: similar_rules.clone(),
+                    agent_merged: Some(!already_recorded),
+                    scope_warning: scope_warning.clone(),
+                }
+            }
             IdentityResolution::RelatedFinding { uuid, distance } => {
                 let new_uuid = Uuid::now_v7();
                 let mut finding = build_finding(
@@ -499,6 +707,8 @@ impl TallyMcpServer {
                     agent,
                     &ctx,
                 );
+                finding.rule_id.clone_from(&canonical_rule_id);
+                finding.original_rule_id.clone_from(&original_rule_id);
                 add_input_relationship(
                     &store,
                     &mut finding,
@@ -513,6 +723,12 @@ impl TallyMcpServer {
                     related_to: Some(uuid.to_string()),
                     distance: Some(distance),
                     expires_at: None,
+                    rule_id: Some(canonical_rule_id.clone()),
+                    original_rule_id: original_rule_id.clone(),
+                    normalized_by: normalized_by.clone(),
+                    similar_rules: similar_rules.clone(),
+                    agent_merged: None,
+                    scope_warning: scope_warning.clone(),
                 }
             }
             IdentityResolution::NewFinding => {
@@ -526,6 +742,8 @@ impl TallyMcpServer {
                     agent,
                     &ctx,
                 );
+                finding.rule_id.clone_from(&canonical_rule_id);
+                finding.original_rule_id.clone_from(&original_rule_id);
                 add_input_relationship(
                     &store,
                     &mut finding,
@@ -540,6 +758,12 @@ impl TallyMcpServer {
                     related_to: None,
                     distance: None,
                     expires_at: None,
+                    rule_id: Some(canonical_rule_id.clone()),
+                    original_rule_id: original_rule_id.clone(),
+                    normalized_by: normalized_by.clone(),
+                    similar_rules: similar_rules.clone(),
+                    agent_merged: None,
+                    scope_warning,
                 }
             }
         };
@@ -718,6 +942,12 @@ impl TallyMcpServer {
                 related_to: None,
                 distance: None,
                 expires_at: None,
+                rule_id: None,
+                original_rule_id: None,
+                normalized_by: None,
+                similar_rules: None,
+                agent_merged: None,
+                scope_warning: None,
             })
             .unwrap_or_default(),
         )]))
@@ -859,6 +1089,12 @@ impl TallyMcpServer {
                 related_to: None,
                 distance: None,
                 expires_at: expires_at.map(|d| d.to_rfc3339()),
+                rule_id: None,
+                original_rule_id: None,
+                normalized_by: None,
+                similar_rules: None,
+                agent_merged: None,
+                scope_warning: None,
             })
             .unwrap_or_default(),
         )]))
@@ -878,6 +1114,12 @@ impl TallyMcpServer {
                 related_to: None,
                 distance: None,
                 expires_at: None,
+                rule_id: None,
+                original_rule_id: None,
+                normalized_by: None,
+                similar_rules: None,
+                agent_merged: None,
+                scope_warning: None,
             })
             .unwrap_or_default(),
         )]))
@@ -934,19 +1176,40 @@ impl TallyMcpServer {
     }
 
     #[tool(
-        description = "Rebuild the index.json from finding files on the findings-data branch. Use this if the index becomes out of sync, or after manual edits to finding files."
+        description = "Rebuild the index.json from finding files on the findings-data branch. Optionally recalculate rule finding_count with include_rules=true."
     )]
-    pub async fn rebuild_index(&self) -> Result<CallToolResult, McpError> {
+    pub async fn rebuild_index(
+        &self,
+        params: Parameters<RebuildIndexInput>,
+    ) -> Result<CallToolResult, McpError> {
         let store = self.store()?;
         store.rebuild_index().map_err(to_mcp_err)?;
+
+        let include_rules = params.0.include_rules.unwrap_or(false);
+        if include_rules {
+            store.rebuild_rule_counts().map_err(to_mcp_err)?;
+        }
+
+        let message = if include_rules {
+            "index.json and rule finding_counts rebuilt"
+        } else {
+            "index.json rebuilt from finding files"
+        };
+
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&ToolOutput {
                 status: "rebuilt".into(),
                 uuid: None,
-                message: Some("index.json rebuilt from finding files".into()),
+                message: Some(message.into()),
                 related_to: None,
                 distance: None,
                 expires_at: None,
+                rule_id: None,
+                original_rule_id: None,
+                normalized_by: None,
+                similar_rules: None,
+                agent_merged: None,
+                scope_warning: None,
             })
             .unwrap_or_default(),
         )]))
@@ -1207,6 +1470,360 @@ impl TallyMcpServer {
             .unwrap_or_default(),
         )]))
     }
+
+    // --- Rule Registry Tools ---
+
+    #[tool(
+        description = "Register a new rule in the rule registry. Rules enable deduplication across agents. See findings://docs/rule-registry for format details."
+    )]
+    pub async fn create_rule(
+        &self,
+        params: Parameters<CreateRuleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+        crate::cli::rule::handle_rule_create(
+            &store,
+            &input.rule_id,
+            &input.name,
+            &input.description,
+            input.category.as_deref(),
+            input.severity_hint.as_deref(),
+            &input.aliases.unwrap_or_default(),
+            &input.cwe_ids.unwrap_or_default(),
+            &input.scope_include.unwrap_or_default(),
+            &input.scope_exclude.unwrap_or_default(),
+            &input.tags.unwrap_or_default(),
+        )
+        .map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "created",
+                "rule_id": input.rule_id,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Retrieve a rule by ID from the rule registry. Returns full rule details including aliases, scope, examples, and finding count."
+    )]
+    pub async fn get_rule(
+        &self,
+        params: Parameters<GetRuleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let store = self.store()?;
+        let rule = crate::registry::store::RuleStore::load_rule(&store, &params.0.rule_id)
+            .map_err(to_mcp_err)?;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&rule).unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Search rules by query text. Matches against rule IDs, aliases, and descriptions using Jaro-Winkler similarity. Returns ranked results with confidence scores."
+    )]
+    pub async fn search_rules(
+        &self,
+        params: Parameters<SearchRulesInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let store = self.store()?;
+        let query = &params.0.query;
+        let limit = params.0.limit.unwrap_or(10);
+        let method = params.0.method.as_deref().unwrap_or("text");
+
+        // Semantic search path (feature-gated)
+        #[cfg(feature = "semantic-search")]
+        if method == "semantic" {
+            let mut rules =
+                crate::registry::store::RuleStore::load_all_rules(&store).map_err(to_mcp_err)?;
+            let results =
+                crate::registry::semantic::semantic_search(&store, &mut rules, query, limit)
+                    .map_err(to_mcp_err)?;
+            let json_results: Vec<serde_json::Value> = results
+                .iter()
+                .map(|(id, score)| {
+                    serde_json::json!({"id": id, "confidence": score, "method": "semantic"})
+                })
+                .collect();
+            return Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&json_results).unwrap_or_default(),
+            )]));
+        }
+        #[cfg(not(feature = "semantic-search"))]
+        if method == "semantic" {
+            return Err(to_mcp_err(crate::error::TallyError::InvalidInput(
+                "Semantic search requires --features semantic-search".to_string(),
+            )));
+        }
+
+        let rules =
+            crate::registry::store::RuleStore::load_all_rules(&store).map_err(to_mcp_err)?;
+        let matcher = crate::registry::RuleMatcher::new(rules.clone());
+        let mut results = Vec::new();
+
+        // Exact/alias check first
+        if let Some(rule) = matcher.get_rule(query) {
+            results.push(serde_json::json!({
+                "id": rule.id,
+                "name": rule.name,
+                "description": rule.description,
+                "confidence": 1.0,
+                "method": "exact",
+                "category": rule.category,
+                "status": rule.status,
+                "finding_count": rule.finding_count,
+                "aliases": rule.aliases,
+            }));
+        }
+
+        let query_lower = query.to_ascii_lowercase();
+        for rule in &rules {
+            if results.iter().any(|r| r["id"] == rule.id) {
+                continue;
+            }
+            let score = strsim::jaro_winkler(&query_lower, &rule.id);
+            let alias_score = rule
+                .aliases
+                .iter()
+                .map(|a| strsim::jaro_winkler(&query_lower, a))
+                .fold(0.0_f64, f64::max);
+            let best = score.max(alias_score);
+            if best >= 0.3 {
+                results.push(serde_json::json!({
+                    "id": rule.id,
+                    "name": rule.name,
+                    "description": rule.description,
+                    "confidence": best,
+                    "method": if alias_score > score { "alias_match" } else { "jaro_winkler" },
+                    "category": rule.category,
+                    "status": rule.status,
+                    "finding_count": rule.finding_count,
+                    "aliases": rule.aliases,
+                }));
+            }
+        }
+
+        results.sort_by(|a, b| {
+            b["confidence"]
+                .as_f64()
+                .unwrap_or(0.0)
+                .partial_cmp(&a["confidence"].as_f64().unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit);
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&results).unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(description = "List all rules in the registry with optional category/status filters.")]
+    pub async fn list_rules(
+        &self,
+        params: Parameters<ListRulesInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let store = self.store()?;
+        let mut rules =
+            crate::registry::store::RuleStore::load_all_rules(&store).map_err(to_mcp_err)?;
+
+        if let Some(ref cat) = params.0.category {
+            rules.retain(|r| r.category == *cat);
+        }
+        if let Some(ref st) = params.0.status {
+            let target: crate::registry::RuleStatus = st
+                .parse()
+                .map_err(|e: String| to_mcp_err(crate::error::TallyError::InvalidInput(e)))?;
+            rules.retain(|r| r.status == target);
+        }
+
+        rules.sort_by(|a, b| a.id.cmp(&b.id));
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&rules).unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Update mutable fields on a rule (name, description, status, aliases, CWE IDs)."
+    )]
+    pub async fn update_rule(
+        &self,
+        params: Parameters<UpdateRuleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+        crate::cli::rule::handle_rule_update(
+            &store,
+            &input.rule_id,
+            input.name.as_deref(),
+            input.description.as_deref(),
+            input.status.as_deref(),
+            &input.add_aliases.unwrap_or_default(),
+            &input.remove_aliases.unwrap_or_default(),
+            &input.add_cwe.unwrap_or_default(),
+            &[], // scope_include
+            &[], // scope_exclude
+        )
+        .map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "updated",
+                "rule_id": input.rule_id,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Deprecate a rule (set status to deprecated). Deprecated rules still resolve in the matching pipeline — new findings warn that the rule is deprecated but are still recorded."
+    )]
+    pub async fn delete_rule(
+        &self,
+        params: Parameters<DeleteRuleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let store = self.store()?;
+        crate::cli::rule::handle_rule_delete(&store, &params.0.rule_id, &params.0.reason)
+            .map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "deprecated",
+                "rule_id": params.0.rule_id,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Add a code example (bad/good pattern) to a rule. Examples help agents understand what the rule checks."
+    )]
+    pub async fn add_rule_example(
+        &self,
+        params: Parameters<AddRuleExampleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+        crate::cli::rule::handle_rule_add_example(
+            &store,
+            &input.rule_id,
+            &input.example_type,
+            &input.language,
+            &input.code,
+            &input.explanation,
+        )
+        .map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "example_added",
+                "rule_id": input.rule_id,
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Migrate existing findings into the rule registry. Scans all findings, extracts unique rule IDs, and auto-registers each as an experimental rule. Idempotent — second run registers 0 new rules."
+    )]
+    pub async fn migrate_rules(
+        &self,
+        params: Parameters<MigrateRulesInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let _dry_run = params.0.dry_run.unwrap_or(false);
+        let store = self.store()?;
+        crate::cli::rule::handle_rule_migrate(&store).map_err(to_mcp_err)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "migrated",
+            }))
+            .unwrap_or_default(),
+        )]))
+    }
+
+    #[tool(
+        description = "Transition multiple findings' lifecycle status in one call. Each finding is processed independently — invalid transitions don't block valid ones (partial success). Returns per-finding results with success/error status."
+    )]
+    pub async fn update_batch_status(
+        &self,
+        params: Parameters<UpdateBatchStatusInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let store = self.store()?;
+        let new_status: LifecycleState = input.status.parse().map_err(|e: String| McpError {
+            code: ErrorCode::INVALID_REQUEST,
+            message: e.into(),
+            data: None,
+        })?;
+
+        let agent = input.agent.unwrap_or_else(|| "mcp-client".into());
+        let mut results = Vec::new();
+
+        for finding_id in &input.finding_ids {
+            let result = (|| -> Result<serde_json::Value, McpError> {
+                let uuid = resolve_id_mcp(&store, finding_id)?;
+                let mut finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
+
+                if !finding.status.can_transition_to(new_status) {
+                    return Ok(serde_json::json!({
+                        "finding_id": finding_id,
+                        "uuid": uuid.to_string(),
+                        "status": "error",
+                        "error": format!(
+                            "Invalid transition: {} -> {} (valid: {})",
+                            finding.status,
+                            new_status,
+                            finding.status.allowed_transitions()
+                                .iter()
+                                .map(std::string::ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    }));
+                }
+
+                finding.state_history.push(StateTransition {
+                    from: finding.status,
+                    to: new_status,
+                    timestamp: Utc::now(),
+                    agent_id: agent.clone(),
+                    reason: input.reason.clone(),
+                    commit_sha: None,
+                });
+                finding.status = new_status;
+                finding.updated_at = Utc::now();
+                store.save_finding(&finding).map_err(to_mcp_err)?;
+
+                Ok(serde_json::json!({
+                    "finding_id": finding_id,
+                    "uuid": uuid.to_string(),
+                    "status": "success",
+                    "new_status": new_status.to_string(),
+                }))
+            })();
+
+            match result {
+                Ok(val) => results.push(val),
+                Err(e) => results.push(serde_json::json!({
+                    "finding_id": finding_id,
+                    "status": "error",
+                    "error": e.message.to_string(),
+                })),
+            }
+        }
+
+        let output = serde_json::json!({
+            "total": input.finding_ids.len(),
+            "results": results,
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&output).unwrap_or_default(),
+        )]))
+    }
 }
 
 /// Import a single finding from dclaude/zclaude JSON format (MCP helper).
@@ -1287,6 +1904,7 @@ fn import_finding_from_json(
         uuid: new_uuid,
         content_fingerprint: fingerprint,
         rule_id,
+        original_rule_id: None,
         locations: vec![location],
         severity,
         category,
@@ -1354,19 +1972,52 @@ impl TallyMcpServer {
         Parameters(args): Parameters<TriageFileArgs>,
     ) -> Result<Vec<PromptMessage>, McpError> {
         let store = self.store()?;
-        let findings_json = read_resource_file(&store, &args.file_path)?;
+        let findings = store.load_all().map_err(to_mcp_err)?;
+        let matched: Vec<&Finding> = findings
+            .iter()
+            .filter(|f| {
+                f.locations
+                    .iter()
+                    .any(|l| l.file_path.contains(&args.file_path))
+            })
+            .collect();
+        let findings_json = serde_json::to_string_pretty(&matched).map_err(|e| McpError {
+            code: ErrorCode(-1),
+            message: format!("Serialization error: {e}").into(),
+            data: None,
+        })?;
+
+        // Best-effort: load rules and check for scope restrictions
+        let mut scope_notes = String::new();
+        let unique_rule_ids: std::collections::HashSet<&str> =
+            matched.iter().map(|f| f.rule_id.as_str()).collect();
+        let mut rules_with_scope = Vec::new();
+        for rule_id in &unique_rule_ids {
+            if let Ok(rule) = crate::registry::store::RuleStore::load_rule(&store, rule_id) {
+                if rule.scope.is_some() {
+                    rules_with_scope.push(rule.id.clone());
+                }
+            }
+        }
+        if !rules_with_scope.is_empty() {
+            scope_notes = format!(
+                "\n\nNote: the following rules have scope restrictions (check scope_warning if present): {}",
+                rules_with_scope.join(", ")
+            );
+        }
 
         Ok(vec![PromptMessage::new_text(
             PromptMessageRole::User,
             format!(
-                "Here are all the findings for `{}`:\n\n```json\n{findings_json}\n```\n\n\
+                "Here are all the findings for `{}`:\n\n```json\n{findings_json}\n```{scope_notes}\n\n\
                  Please triage these findings:\n\
                  1. Classify each by priority (fix now, fix soon, defer, ignore)\n\
                  2. Assess the impact of each finding — consider the category, severity, and any relationships to other findings\n\
-                 3. Suggest an optimal fix order (dependencies, quick wins first)\n\
-                 4. For each \"fix now\" finding, use the suggested_fix if available, otherwise provide a remediation approach\n\
-                 5. Note which agent discovered each finding (discovered_by field) and any PR context (pr_number field)\n\
-                 6. Group by category if findings span multiple categories",
+                 3. Some findings may be out of scope for their rule — check scope restrictions and deprioritize accordingly\n\
+                 4. Suggest an optimal fix order (dependencies, quick wins first)\n\
+                 5. For each \"fix now\" finding, use the suggested_fix if available, otherwise provide a remediation approach\n\
+                 6. Note which agent discovered each finding (discovered_by field) and any PR context (pr_number field)\n\
+                 7. Group by category if findings span multiple categories",
                 args.file_path
             ),
         )])
@@ -1382,21 +2033,51 @@ impl TallyMcpServer {
         Parameters(args): Parameters<FixFindingArgs>,
     ) -> Result<Vec<PromptMessage>, McpError> {
         let store = self.store()?;
-        let finding_json = read_resource_detail(&store, &args.finding_id)?;
+        let uuid = resolve_id_mcp(&store, &args.finding_id)?;
+        let finding = store.load_finding(&uuid).map_err(to_mcp_err)?;
+        let finding_json = serde_json::to_string_pretty(&finding).map_err(|e| McpError {
+            code: ErrorCode(-1),
+            message: format!("Serialization error: {e}").into(),
+            data: None,
+        })?;
+
+        // Best-effort: load the rule for examples and fix patterns
+        let mut rule_context = String::new();
+        if let Ok(rule) = crate::registry::store::RuleStore::load_rule(&store, &finding.rule_id) {
+            if !rule.examples.is_empty() {
+                rule_context.push_str("\n\nHere are known bad/good patterns for this rule:\n");
+                for ex in &rule.examples {
+                    use std::fmt::Write;
+                    let _ = write!(
+                        rule_context,
+                        "\n**{} example** ({}):\n```{}\n{}\n```\n_{}_\n",
+                        ex.example_type, ex.language, ex.language, ex.code, ex.explanation
+                    );
+                }
+            }
+            if let Some(ref pattern) = rule.suggested_fix_pattern {
+                use std::fmt::Write;
+                let _ = write!(
+                    rule_context,
+                    "\n\nThe rule registry suggests this fix pattern: `{pattern}`\n"
+                );
+            }
+        }
 
         Ok(vec![PromptMessage::new_text(
             PromptMessageRole::User,
             format!(
                 "Here is a code finding that needs to be fixed:\n\n\
-                 ```json\n{finding_json}\n```\n\n\
+                 ```json\n{finding_json}\n```{rule_context}\n\n\
                  Please:\n\
                  1. Explain what the issue is and why it matters\n\
                  2. If the finding has a suggested_fix field, evaluate it and refine if needed; otherwise propose a fix\n\
-                 3. Show the exact code change needed (with before/after)\n\
-                 4. Use the evidence field to understand the current code state\n\
-                 5. Check the relationships field — if this finding is linked to others, consider them in the fix\n\
-                 6. Explain any edge cases or risks with the fix\n\
-                 7. Suggest a test to verify the fix"
+                 3. If rule examples or a suggested_fix_pattern are shown above, use them to guide the fix\n\
+                 4. Show the exact code change needed (with before/after)\n\
+                 5. Use the evidence field to understand the current code state\n\
+                 6. Check the relationships field — if this finding is linked to others, consider them in the fix\n\
+                 7. Explain any edge cases or risks with the fix\n\
+                 8. Suggest a test to verify the fix"
             ),
         )])
     }
@@ -1410,11 +2091,29 @@ impl TallyMcpServer {
         let store = self.store()?;
         let summary_json = read_resource_summary(&store)?;
 
+        // Best-effort: load rule registry for health stats
+        let mut rule_context = String::new();
+        if let Ok(rules) = crate::registry::store::RuleStore::load_all_rules(&store) {
+            let total_rules = rules.len();
+            let experimental = rules
+                .iter()
+                .filter(|r| r.status == crate::registry::RuleStatus::Experimental)
+                .count();
+            let deprecated = rules
+                .iter()
+                .filter(|r| r.status == crate::registry::RuleStatus::Deprecated)
+                .count();
+            rule_context = format!(
+                "\n\nRule registry health: {total_rules} rules registered, \
+                 {experimental} experimental, {deprecated} deprecated."
+            );
+        }
+
         Ok(vec![PromptMessage::new_text(
             PromptMessageRole::User,
             format!(
                 "Here is the current findings summary:\n\n\
-                 ```json\n{summary_json}\n```\n\n\
+                 ```json\n{summary_json}\n```{rule_context}\n\n\
                  Please create a concise stakeholder-ready report that includes:\n\
                  1. Executive summary (1-2 sentences on overall code health)\n\
                  2. Breakdown by severity with counts\n\
@@ -1422,7 +2121,9 @@ impl TallyMcpServer {
                  4. Trends by category and tags (which areas have the most issues?)\n\
                  5. PR correlation — if findings have pr_number, note which PRs introduced the most issues\n\
                  6. Agent provenance — which discovery agents found the most issues\n\
-                 7. Recommendations for the team"
+                 7. Recommendations for the team\n\
+                 8. Breakdown by rule ID — which rules produce the most findings?\n\
+                 9. Rule registry health: how many rules are active vs experimental vs deprecated"
             ),
         )])
     }
@@ -1434,21 +2135,75 @@ impl TallyMcpServer {
     )]
     pub async fn review_pr(&self) -> Result<Vec<PromptMessage>, McpError> {
         let store = self.store()?;
-        let open_json = read_resource_by_status(&store, "open")?;
+        let all_findings = store.load_all().map_err(to_mcp_err)?;
+
+        // Try to detect the most relevant PR from open findings
+        let open_findings: Vec<&Finding> = all_findings
+            .iter()
+            .filter(|f| f.status == LifecycleState::Open)
+            .collect();
+
+        // Find the most common PR number among open findings
+        let mut pr_counts: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+        for f in &open_findings {
+            if let Some(pr) = f.pr_number {
+                *pr_counts.entry(pr).or_insert(0) += 1;
+            }
+        }
+        let detected_pr = pr_counts
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(pr, _)| pr);
+
+        let (findings_json, pr_context) = if let Some(pr_num) = detected_pr {
+            let pr_json = read_resource_by_pr(&store, &pr_num.to_string())?;
+            // Identify which findings are recurring across PRs
+            let recurring: Vec<String> = open_findings
+                .iter()
+                .filter(|f| f.pr_number.is_some() && f.pr_number != Some(pr_num))
+                .map(|f| f.uuid.to_string())
+                .collect();
+            let recurring_note = if recurring.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\nRecurring findings (also appear in other PRs): {}",
+                    recurring.join(", ")
+                )
+            };
+            (
+                pr_json,
+                format!(
+                    "\n\nDetected PR context: PR #{pr_num}. \
+                     Findings shown are scoped to this PR.{recurring_note}"
+                ),
+            )
+        } else {
+            let open_json = serde_json::to_string_pretty(&open_findings).map_err(|e| McpError {
+                code: ErrorCode(-1),
+                message: format!("Serialization error: {e}").into(),
+                data: None,
+            })?;
+            (
+                open_json,
+                String::from("\n\nNo specific PR detected — showing all open findings."),
+            )
+        };
 
         Ok(vec![PromptMessage::new_text(
             PromptMessageRole::User,
             format!(
-                "Here are all open findings in this repository:\n\n\
-                 ```json\n{open_json}\n```\n\n\
+                "Here are the findings for review:\n\n\
+                 ```json\n{findings_json}\n```{pr_context}\n\n\
                  Please write a PR review comment that:\n\
                  1. Lists critical and important findings as blocking issues\n\
                  2. Lists suggestions as non-blocking recommendations\n\
                  3. Groups findings by file for easy navigation\n\
                  4. For each finding, include the category tag and which agent discovered it (from discovered_by)\n\
                  5. If findings have relationships, mention them (e.g., 'related to C1', 'discovered while fixing I2')\n\
-                 6. Uses a professional, constructive tone\n\
-                 7. Formats as a GitHub PR review comment with markdown"
+                 6. Include cross-session context — note which findings are new vs recurring\n\
+                 7. Uses a professional, constructive tone\n\
+                 8. Formats as a GitHub PR review comment with markdown"
             ),
         )])
     }
@@ -1478,6 +2233,173 @@ impl TallyMcpServer {
                  5. Whether this is a false positive or a genuine concern\n\
                  6. If the finding has relationships to other findings, explain the connection\n\
                  7. Note which agent discovered it and when (from discovered_by and created_at)"
+            ),
+        )])
+    }
+
+    /// Analyze all rules in the registry and suggest consolidation opportunities.
+    #[prompt(
+        name = "consolidate-rules",
+        description = "Load all rules from the registry and suggest merges, alias improvements, deprecation candidates, and scope recommendations"
+    )]
+    pub async fn consolidate_rules(&self) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let rules =
+            crate::registry::store::RuleStore::load_all_rules(&store).map_err(to_mcp_err)?;
+        let rules_json = serde_json::to_string_pretty(&rules).map_err(|e| McpError {
+            code: ErrorCode(-1),
+            message: format!("Serialization error: {e}").into(),
+            data: None,
+        })?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here are all rules in the registry:\n\n\
+                 ```json\n{rules_json}\n```\n\n\
+                 Please analyze and suggest:\n\
+                 1. Rules that should be merged (similar descriptions or overlapping aliases)\n\
+                 2. Alias recommendations (common alternative names that should map to existing rules)\n\
+                 3. Rules with 0 findings (finding_count field) that may be candidates for deprecation\n\
+                 4. Scope recommendations based on rule categories (which rules should have file glob restrictions?)"
+            ),
+        )])
+    }
+
+    /// Compare rules vs findings to identify coverage gaps.
+    #[prompt(
+        name = "rule-coverage-report",
+        description = "Load all rules and findings to build a coverage map — identify gaps, unregistered patterns, and consolidation opportunities"
+    )]
+    pub async fn rule_coverage_report(&self) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let rules =
+            crate::registry::store::RuleStore::load_all_rules(&store).map_err(to_mcp_err)?;
+        let findings = store.load_all().map_err(to_mcp_err)?;
+
+        // Build actual rule_id -> finding count mapping
+        let mut rule_finding_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for f in &findings {
+            *rule_finding_counts.entry(f.rule_id.clone()).or_insert(0) += 1;
+        }
+
+        // Rules without any findings
+        let registered_ids: std::collections::HashSet<&str> =
+            rules.iter().map(|r| r.id.as_str()).collect();
+        let rules_without_findings: Vec<&str> = rules
+            .iter()
+            .filter(|r| !rule_finding_counts.contains_key(&r.id))
+            .map(|r| r.id.as_str())
+            .collect();
+
+        // Findings with unregistered rule_ids
+        let unregistered_rule_ids: Vec<&str> = rule_finding_counts
+            .keys()
+            .filter(|id| !registered_ids.contains(id.as_str()))
+            .map(String::as_str)
+            .collect();
+
+        let coverage_json =
+            serde_json::to_string_pretty(&rule_finding_counts).map_err(|e| McpError {
+                code: ErrorCode(-1),
+                message: format!("Serialization error: {e}").into(),
+                data: None,
+            })?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here is the rule coverage data (rule_id -> finding count):\n\n\
+                 ```json\n{coverage_json}\n```\n\n\
+                 Rules without any findings: {}\n\n\
+                 Findings with unregistered rule_ids: {}\n\n\
+                 Please:\n\
+                 1. Identify gaps in the rule registry (common patterns in unregistered IDs)\n\
+                 2. Suggest new rules for unregistered patterns\n\
+                 3. Recommend rule consolidation for overlapping coverage\n\
+                 4. Flag rules with zero findings as deprecation candidates",
+                if rules_without_findings.is_empty() {
+                    "none".to_string()
+                } else {
+                    rules_without_findings.join(", ")
+                },
+                if unregistered_rule_ids.is_empty() {
+                    "none".to_string()
+                } else {
+                    unregistered_rule_ids.join(", ")
+                }
+            ),
+        )])
+    }
+
+    /// Group all open findings by rule and suggest prioritized triage.
+    #[prompt(
+        name = "triage-by-rule",
+        description = "Load all open findings grouped by rule with rule details, and suggest per-rule-group prioritization and fix strategy"
+    )]
+    pub async fn triage_by_rule(&self) -> Result<Vec<PromptMessage>, McpError> {
+        let store = self.store()?;
+        let findings = store.load_all().map_err(to_mcp_err)?;
+        let open_findings: Vec<&Finding> = findings
+            .iter()
+            .filter(|f| f.status == LifecycleState::Open)
+            .collect();
+
+        // Group by rule_id
+        let mut by_rule: std::collections::HashMap<String, Vec<&Finding>> =
+            std::collections::HashMap::new();
+        for f in &open_findings {
+            by_rule.entry(f.rule_id.clone()).or_default().push(f);
+        }
+
+        // Build enriched groups with rule details
+        let mut groups: Vec<serde_json::Value> = Vec::new();
+        for (rule_id, rule_findings) in &by_rule {
+            let rule_detail = crate::registry::store::RuleStore::load_rule(&store, rule_id).ok();
+            let has_examples = rule_detail.as_ref().is_some_and(|r| !r.examples.is_empty());
+            let severity_hint = rule_detail
+                .as_ref()
+                .map(|r| r.severity_hint.clone())
+                .unwrap_or_default();
+            groups.push(serde_json::json!({
+                "rule_id": rule_id,
+                "count": rule_findings.len(),
+                "severity_hint": severity_hint,
+                "has_examples": has_examples,
+                "findings": rule_findings,
+            }));
+        }
+
+        // Sort by count descending for prioritization
+        groups.sort_by(|a, b| {
+            b.get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                .cmp(
+                    &a.get("count")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0),
+                )
+        });
+
+        let groups_json = serde_json::to_string_pretty(&groups).map_err(|e| McpError {
+            code: ErrorCode(-1),
+            message: format!("Serialization error: {e}").into(),
+            data: None,
+        })?;
+
+        Ok(vec![PromptMessage::new_text(
+            PromptMessageRole::User,
+            format!(
+                "Here are all open findings grouped by rule:\n\n\
+                 ```json\n{groups_json}\n```\n\n\
+                 For each rule group, please:\n\
+                 1. Assess overall impact (how many instances, what severity)\n\
+                 2. Recommend whether to fix all instances now or batch for later\n\
+                 3. Identify the highest-impact instance to fix first\n\
+                 4. Note if the rule has examples that guide the fix (has_examples field)\n\
+                 5. Suggest whether a codemod or manual fix is more appropriate based on the count"
             ),
         )])
     }
@@ -1550,15 +2472,40 @@ impl ServerHandler for TallyMcpServer {
         );
         tallyql_doc.mime_type = Some("text/markdown".into());
 
+        let mut rule_registry_doc =
+            RawResource::new("findings://docs/rule-registry", "Rule Registry Reference");
+        rule_registry_doc.description = Some(
+            "Rule registry format, matching pipeline, CLI usage, and MCP tool reference. Read this before creating or searching rules."
+                .into(),
+        );
+        rule_registry_doc.mime_type = Some("text/markdown".into());
+
+        let mut version_resource = RawResource::new("findings://version", "Tally Version Info");
+        version_resource.description =
+            Some("Tally version, feature flags, rule count, and finding count".into());
+        version_resource.mime_type = Some("application/json".into());
+
+        let mut rules_summary_resource =
+            RawResource::new("findings://rules/summary", "Rule Registry Summary");
+        rules_summary_resource.description = Some(
+            "Rule registry summary: counts by status and category, top 10 most-used rules, rules with zero findings"
+                .into(),
+        );
+        rules_summary_resource.mime_type = Some("application/json".into());
+
         Ok(ListResourcesResult {
             next_cursor: None,
             resources: vec![
                 Annotated::new(resource, None),
                 Annotated::new(tallyql_doc, None),
+                Annotated::new(rule_registry_doc, None),
+                Annotated::new(version_resource, None),
+                Annotated::new(rules_summary_resource, None),
             ],
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn list_resource_templates(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParam>,
@@ -1638,6 +2585,43 @@ impl ServerHandler for TallyMcpServer {
                     },
                     None,
                 ),
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://rules/{rule_id}".into(),
+                        name: "Rule Detail with Findings".into(),
+                        title: None,
+                        description: Some(
+                            "Full rule JSON plus all findings matching that rule ID".into(),
+                        ),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://agent/{agent_id}".into(),
+                        name: "Findings by Agent".into(),
+                        title: None,
+                        description: Some(
+                            "All findings discovered by a specific agent".into(),
+                        ),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
+                Annotated::new(
+                    RawResourceTemplate {
+                        uri_template: "findings://timeline/{duration}".into(),
+                        name: "Finding Timeline".into(),
+                        title: None,
+                        description: Some(
+                            "Finding creation/resolution timeline for a duration (e.g., 7d, 30d)"
+                                .into(),
+                        ),
+                        mime_type: Some("application/json".into()),
+                    },
+                    None,
+                ),
             ],
         })
     }
@@ -1652,6 +2636,8 @@ impl ServerHandler for TallyMcpServer {
 
         let content = if uri == "findings://docs/tallyql-syntax" {
             include_str!("../../docs/reference/tallyql-syntax.md").to_string()
+        } else if uri == "findings://docs/rule-registry" {
+            include_str!("../../docs/reference/rule-registry.md").to_string()
         } else if uri == "findings://summary" {
             read_resource_summary(&store)?
         } else if let Some(path) = uri.strip_prefix("findings://file/") {
@@ -1666,6 +2652,16 @@ impl ServerHandler for TallyMcpServer {
             read_resource_by_rule(&store, rule)?
         } else if let Some(pr_str) = uri.strip_prefix("findings://pr/") {
             read_resource_by_pr(&store, pr_str)?
+        } else if uri == "findings://version" {
+            read_resource_version(&store)?
+        } else if uri == "findings://rules/summary" {
+            read_resource_rules_summary(&store)?
+        } else if let Some(rule_id) = uri.strip_prefix("findings://rules/") {
+            read_resource_rule_detail(&store, rule_id)?
+        } else if let Some(agent_id) = uri.strip_prefix("findings://agent/") {
+            read_resource_by_agent(&store, agent_id)?
+        } else if let Some(duration) = uri.strip_prefix("findings://timeline/") {
+            read_resource_timeline(&store, duration)?
         } else {
             return Err(McpError {
                 code: ErrorCode::INVALID_REQUEST,
@@ -1794,6 +2790,7 @@ fn record_batch_entry(
                 uuid: new_uuid,
                 content_fingerprint: fingerprint,
                 rule_id: entry.rule_id.clone(),
+                original_rule_id: None,
                 locations: vec![location],
                 severity,
                 category: entry.category.clone().unwrap_or_default(),
@@ -1841,6 +2838,7 @@ fn build_finding(
         uuid,
         content_fingerprint: fingerprint,
         rule_id: input.rule_id.clone(),
+        original_rule_id: None,
         locations,
         severity,
         category: input.category.clone().unwrap_or_default(),
@@ -2055,6 +3053,224 @@ pub fn read_resource_by_pr(store: &GitFindingsStore, pr_str: &str) -> Result<Str
         .filter(|f| f.pr_number == Some(pr_number))
         .collect();
     serde_json::to_string_pretty(&matched).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+/// Read the `findings://version` resource — version, feature flags, counts.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage fails.
+pub fn read_resource_version(store: &GitFindingsStore) -> Result<String, McpError> {
+    let rule_count = crate::registry::store::RuleStore::load_all_rules(store)
+        .map(|r| r.len())
+        .unwrap_or(0);
+    let finding_count = store.load_all().map(|f| f.len()).unwrap_or(0);
+
+    let version_info = serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "semantic_search": cfg!(feature = "semantic-search"),
+        "rule_count": rule_count,
+        "finding_count": finding_count,
+    });
+
+    serde_json::to_string_pretty(&version_info).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+/// Read the `findings://rules/summary` resource — rule registry summary with aggregates.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage or serialization fails.
+pub fn read_resource_rules_summary(store: &GitFindingsStore) -> Result<String, McpError> {
+    let rules = crate::registry::store::RuleStore::load_all_rules(store).map_err(to_mcp_err)?;
+    let findings = store.load_all().map_err(to_mcp_err)?;
+
+    // Count by status
+    let mut by_status = std::collections::HashMap::new();
+    for rule in &rules {
+        *by_status.entry(rule.status.to_string()).or_insert(0u32) += 1;
+    }
+
+    // Count by category
+    let mut by_category = std::collections::HashMap::new();
+    for rule in &rules {
+        let cat = if rule.category.is_empty() {
+            "uncategorized"
+        } else {
+            &rule.category
+        };
+        *by_category.entry(cat.to_string()).or_insert(0u32) += 1;
+    }
+
+    // Count findings per rule
+    let mut finding_counts: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+    for f in &findings {
+        *finding_counts.entry(f.rule_id.clone()).or_insert(0) += 1;
+    }
+
+    // Top 10 most-used rules
+    let mut rule_usage: Vec<(&str, u32)> = rules
+        .iter()
+        .map(|r| (r.id.as_str(), *finding_counts.get(&r.id).unwrap_or(&0)))
+        .collect();
+    rule_usage.sort_by(|a, b| b.1.cmp(&a.1));
+    let top_rules: Vec<serde_json::Value> = rule_usage
+        .iter()
+        .take(10)
+        .map(|(id, count)| {
+            serde_json::json!({
+                "rule_id": id,
+                "finding_count": count,
+            })
+        })
+        .collect();
+
+    // Rules with 0 findings
+    let zero_findings: Vec<&str> = rules
+        .iter()
+        .filter(|r| !finding_counts.contains_key(&r.id) || finding_counts[&r.id] == 0)
+        .map(|r| r.id.as_str())
+        .collect();
+
+    let summary = serde_json::json!({
+        "total_rules": rules.len(),
+        "by_status": by_status,
+        "by_category": by_category,
+        "top_10_most_used": top_rules,
+        "rules_with_zero_findings": zero_findings,
+    });
+
+    serde_json::to_string_pretty(&summary).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+/// Read the `findings://rules/{rule_id}` resource — full rule JSON + matching findings.
+///
+/// # Errors
+///
+/// Returns `McpError` if rule not found or serialization fails.
+pub fn read_resource_rule_detail(
+    store: &GitFindingsStore,
+    rule_id: &str,
+) -> Result<String, McpError> {
+    let rule = crate::registry::store::RuleStore::load_rule(store, rule_id).map_err(to_mcp_err)?;
+    let findings = store.load_all().map_err(to_mcp_err)?;
+    let matched: Vec<&Finding> = findings.iter().filter(|f| f.rule_id == rule_id).collect();
+
+    let output = serde_json::json!({
+        "rule": rule,
+        "findings": matched,
+        "finding_count": matched.len(),
+    });
+
+    serde_json::to_string_pretty(&output).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+/// Read the `findings://agent/{agent_id}` resource — findings by agent.
+///
+/// # Errors
+///
+/// Returns `McpError` if storage or serialization fails.
+pub fn read_resource_by_agent(
+    store: &GitFindingsStore,
+    agent_id: &str,
+) -> Result<String, McpError> {
+    let findings = store.load_all().map_err(to_mcp_err)?;
+    let matched: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.discovered_by.iter().any(|a| a.agent_id == agent_id))
+        .collect();
+
+    serde_json::to_string_pretty(&matched).map_err(|e| McpError {
+        code: ErrorCode(-1),
+        message: format!("Serialization error: {e}").into(),
+        data: None,
+    })
+}
+
+/// Read the `findings://timeline/{duration}` resource — creation/resolution timeline.
+///
+/// # Errors
+///
+/// Returns `McpError` if duration is invalid or serialization fails.
+pub fn read_resource_timeline(
+    store: &GitFindingsStore,
+    duration_str: &str,
+) -> Result<String, McpError> {
+    let duration = humantime::parse_duration(duration_str).map_err(|_| McpError {
+        code: ErrorCode::INVALID_REQUEST,
+        message: format!("Invalid duration: {duration_str}").into(),
+        data: None,
+    })?;
+    let delta = chrono::TimeDelta::from_std(duration).map_err(|_| McpError {
+        code: ErrorCode::INVALID_REQUEST,
+        message: format!("Duration out of range: {duration_str}").into(),
+        data: None,
+    })?;
+    let cutoff = chrono::Utc::now() - delta;
+
+    let findings = store.load_all().map_err(to_mcp_err)?;
+
+    // Group by date: created vs resolved
+    let mut created_by_date: std::collections::BTreeMap<String, u32> =
+        std::collections::BTreeMap::new();
+    let mut resolved_by_date: std::collections::BTreeMap<String, u32> =
+        std::collections::BTreeMap::new();
+
+    for f in &findings {
+        if f.created_at >= cutoff {
+            let date = f.created_at.format("%Y-%m-%d").to_string();
+            *created_by_date.entry(date).or_insert(0) += 1;
+        }
+        // Check state history for resolutions within the window
+        for transition in &f.state_history {
+            if transition.timestamp >= cutoff && transition.to == LifecycleState::Resolved {
+                let date = transition.timestamp.format("%Y-%m-%d").to_string();
+                *resolved_by_date.entry(date).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Merge into timeline entries
+    let mut all_dates: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    all_dates.extend(created_by_date.keys().cloned());
+    all_dates.extend(resolved_by_date.keys().cloned());
+
+    let timeline: Vec<serde_json::Value> = all_dates
+        .iter()
+        .map(|date| {
+            serde_json::json!({
+                "date": date,
+                "created": created_by_date.get(date).unwrap_or(&0),
+                "resolved": resolved_by_date.get(date).unwrap_or(&0),
+            })
+        })
+        .collect();
+
+    let output = serde_json::json!({
+        "duration": duration_str,
+        "timeline": timeline,
+        "total_created": created_by_date.values().sum::<u32>(),
+        "total_resolved": resolved_by_date.values().sum::<u32>(),
+    });
+
+    serde_json::to_string_pretty(&output).map_err(|e| McpError {
         code: ErrorCode(-1),
         message: format!("Serialization error: {e}").into(),
         data: None,

@@ -145,6 +145,8 @@ pub struct SyncResult {
     pub merged: bool,
     /// Whether local data was pushed.
     pub pushed: bool,
+    /// Number of rule conflicts resolved via semantic merge.
+    pub rules_merged: usize,
 }
 
 /// Git-backed findings store.
@@ -181,6 +183,8 @@ impl GitFindingsStore {
     pub fn init(&self) -> Result<()> {
         // Check if branch already exists
         if self.branch_exists() {
+            // Upgrade path: ensure rules/ directory exists on existing branches
+            self.ensure_rules_dir()?;
             return Ok(());
         }
 
@@ -209,6 +213,7 @@ impl GitFindingsStore {
             gitkeep_blob,
             FileMode::Blob,
         );
+        builder.upsert("rules/.gitkeep", gitkeep_blob, FileMode::Blob);
         builder.upsert("schema.json", schema_blob, FileMode::Blob);
         builder.upsert(".gitattributes", gitattributes_blob, FileMode::Blob);
 
@@ -480,11 +485,24 @@ impl GitFindingsStore {
                             .merge_trees(&base_tree, &local_tree, &remote_tree, None)?;
 
                     if merge_index.has_conflicts() {
-                        return Err(TallyError::Git(git2::Error::from_str(
-                            "Merge conflict on findings-data branch. \
-                             This should not happen with one-file-per-finding. \
-                             Resolve manually with: git checkout findings-data && git merge origin/findings-data",
-                        )));
+                        // Try to resolve rule conflicts semantically
+                        let rules_merged = resolve_rule_conflicts(&self.repo, &mut merge_index)?;
+                        if rules_merged > 0 {
+                            tracing::info!(
+                                rules_merged,
+                                "Resolved rule conflicts via semantic merge"
+                            );
+                        }
+
+                        // If conflicts remain after rule resolution, they're
+                        // on findings — that's unexpected
+                        if merge_index.has_conflicts() {
+                            return Err(TallyError::Git(git2::Error::from_str(
+                                "Merge conflict on findings-data branch. \
+                                 Rule conflicts were resolved but finding conflicts remain. \
+                                 Resolve manually with: git checkout findings-data && git merge origin/findings-data",
+                            )));
+                        }
                     }
 
                     let merged_tree_oid = merge_index.write_tree_to(&self.repo)?;
@@ -515,6 +533,7 @@ impl GitFindingsStore {
                         fetched: remote_commit.is_some(),
                         merged,
                         pushed: true,
+                        rules_merged: 0,
                     });
                 }
                 Err(e) if attempt < MAX_LOCK_RETRIES - 1 => {
@@ -540,7 +559,75 @@ impl GitFindingsStore {
         unreachable!("retry loop should have returned")
     }
 
+    /// Rebuild rule `finding_count` fields by scanning all findings.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if git operations fail.
+    pub fn rebuild_rule_counts(&self) -> Result<()> {
+        let findings = self.load_all()?;
+        let Ok(rules) = self.list_directory_pub("rules") else {
+            return Ok(()); // No rules directory
+        };
+
+        let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for finding in &findings {
+            *counts.entry(finding.rule_id.clone()).or_default() += 1;
+        }
+
+        for name in &rules {
+            if name == ".gitkeep"
+                || std::path::Path::new(name)
+                    .extension()
+                    .is_none_or(|ext| ext != "json")
+            {
+                continue;
+            }
+
+            let file_path = format!("rules/{name}");
+            let Ok(content) = self.read_file(&file_path) else {
+                continue;
+            };
+            let Ok(mut rule) = serde_json::from_slice::<crate::registry::rule::Rule>(&content)
+            else {
+                continue;
+            };
+
+            let actual_count = counts.get(&rule.id).copied().unwrap_or(0);
+            if rule.finding_count != actual_count {
+                rule.finding_count = actual_count;
+                let json =
+                    serde_json::to_string_pretty(&rule).map_err(TallyError::Serialization)?;
+                self.upsert_file(
+                    &file_path,
+                    json.as_bytes(),
+                    &format!("Rebuild rule count: {}", rule.id),
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
     // --- Private helpers ---
+
+    /// Ensure the `rules/` directory exists on the findings-data branch.
+    /// For upgrading pre-1.2 repos that don't have it yet.
+    fn ensure_rules_dir(&self) -> Result<()> {
+        // Check if rules/.gitkeep already exists
+        if self.read_file("rules/.gitkeep").is_ok() {
+            return Ok(());
+        }
+
+        // Add rules/.gitkeep
+        self.upsert_file(
+            "rules/.gitkeep",
+            b"",
+            "Add rules directory for rule registry",
+        )?;
+        tracing::info!("Upgraded findings-data branch: added rules/ directory");
+        Ok(())
+    }
 
     /// Get the branch tip commit.
     fn branch_tip(&self) -> Result<git2::Commit<'_>> {
@@ -582,36 +669,46 @@ impl GitFindingsStore {
     /// Upsert a file on the findings branch and commit.
     ///
     /// Uses `TreeUpdateBuilder` for multi-level path handling and
-    /// retries on ref lock contention (libgit2 doesn't retry automatically).
+    /// retries on ref lock contention or compare-and-swap failure
+    /// (libgit2 doesn't retry automatically).
     fn upsert_file(&self, file_path: &str, content: &[u8], message: &str) -> Result<()> {
         let blob_oid = self.repo.blob(content)?;
-
-        let commit = self.branch_tip()?;
-        let parent_tree = commit.tree()?;
-
-        let mut builder = git2::build::TreeUpdateBuilder::new();
-        builder.upsert(file_path, blob_oid, FileMode::Blob);
-        let new_tree_oid = builder.create_updated(&self.repo, &parent_tree)?;
-        let new_tree = self.repo.find_tree(new_tree_oid)?;
-
         let sig = self.signature()?;
         let ref_name = format!("refs/heads/{}", self.branch_name);
 
-        // Retry on ref lock contention
+        // Retry on ref lock contention or compare-and-swap (Modified) failure.
+        // Blob creation + tree building are INSIDE the loop so they use the
+        // fresh parent tree on Modified retries.
         for attempt in 0..MAX_LOCK_RETRIES {
+            let commit = self.branch_tip()?;
+            let parent_tree = commit.tree()?;
+
+            let mut builder = git2::build::TreeUpdateBuilder::new();
+            builder.upsert(file_path, blob_oid, FileMode::Blob);
+            let new_tree_oid = builder.create_updated(&self.repo, &parent_tree)?;
+            let new_tree = self.repo.find_tree(new_tree_oid)?;
+
             match self
                 .repo
                 .commit(Some(&ref_name), &sig, &sig, message, &new_tree, &[&commit])
             {
                 Ok(_) => return Ok(()),
-                Err(e) if e.code() == ErrorCode::Locked && attempt < MAX_LOCK_RETRIES - 1 => {
+                Err(e)
+                    if (e.code() == ErrorCode::Locked || e.code() == ErrorCode::Modified)
+                        && attempt < MAX_LOCK_RETRIES - 1 =>
+                {
+                    let reason = if e.code() == ErrorCode::Modified {
+                        "Ref modified (compare-and-swap), retrying"
+                    } else {
+                        "Ref lock contention, retrying"
+                    };
                     let delay = Duration::from_millis(100 * u64::from(2_u32.pow(attempt)));
                     tracing::warn!(
                         branch = %self.branch_name,
                         attempt = attempt + 1,
                         max = MAX_LOCK_RETRIES,
                         delay_ms = delay.as_millis(),
-                        "Ref lock contention, retrying"
+                        reason,
                     );
                     thread::sleep(delay);
                 }
@@ -622,6 +719,77 @@ impl GitFindingsStore {
         unreachable!("retry loop should have returned")
     }
 
+    /// Remove a file from the findings branch and commit.
+    fn remove_file(&self, file_path: &str, message: &str) -> Result<()> {
+        let sig = self.signature()?;
+        let ref_name = format!("refs/heads/{}", self.branch_name);
+
+        for attempt in 0..MAX_LOCK_RETRIES {
+            let commit = self.branch_tip()?;
+            let parent_tree = commit.tree()?;
+
+            let mut builder = git2::build::TreeUpdateBuilder::new();
+            builder.remove(file_path);
+            let new_tree_oid = builder.create_updated(&self.repo, &parent_tree)?;
+            let new_tree = self.repo.find_tree(new_tree_oid)?;
+
+            match self
+                .repo
+                .commit(Some(&ref_name), &sig, &sig, message, &new_tree, &[&commit])
+            {
+                Ok(_) => return Ok(()),
+                Err(e)
+                    if (e.code() == ErrorCode::Locked || e.code() == ErrorCode::Modified)
+                        && attempt < MAX_LOCK_RETRIES - 1 =>
+                {
+                    let delay = Duration::from_millis(100 * u64::from(2_u32.pow(attempt)));
+                    thread::sleep(delay);
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        unreachable!("retry loop should have returned")
+    }
+
+    // --- Public wrappers for registry/store use ---
+
+    /// Public wrapper for `upsert_file`. Used by the rule registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TallyError::Git` if git operations fail.
+    pub fn upsert_file_pub(&self, file_path: &str, content: &[u8], message: &str) -> Result<()> {
+        self.upsert_file(file_path, content, message)
+    }
+
+    /// Public wrapper for `read_file`. Used by the rule registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TallyError::Git` if the file doesn't exist or git fails.
+    pub fn read_file_pub(&self, file_path: &str) -> Result<Vec<u8>> {
+        self.read_file(file_path)
+    }
+
+    /// Public wrapper for `list_directory`. Used by the rule registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TallyError::Git` if the directory doesn't exist or git fails.
+    pub fn list_directory_pub(&self, dir_path: &str) -> Result<Vec<String>> {
+        self.list_directory(dir_path)
+    }
+
+    /// Public wrapper for `remove_file`. Used by the rule registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TallyError::Git` if git operations fail.
+    pub fn remove_file_pub(&self, file_path: &str, message: &str) -> Result<()> {
+        self.remove_file(file_path, message)
+    }
+
     /// Create a git signature for commits.
     fn signature(&self) -> Result<Signature<'_>> {
         // Try to use the repo's configured user, fall back to tally defaults
@@ -630,4 +798,176 @@ impl GitFindingsStore {
             .or_else(|_| Signature::now("tally", "tally@localhost"))
             .map_err(Into::into)
     }
+}
+
+/// Resolve conflicts on `rules/*.json` paths via semantic merge.
+///
+/// Returns the number of rule conflicts resolved. Findings conflicts
+/// (paths under `findings/`) are left as-is for the caller to handle.
+fn resolve_rule_conflicts(repo: &Repository, merge_index: &mut git2::Index) -> Result<usize> {
+    let conflicts: Vec<_> = merge_index
+        .conflicts()?
+        .collect::<std::result::Result<_, _>>()?;
+    let mut resolved = 0;
+
+    for conflict in &conflicts {
+        let path = conflict
+            .our
+            .as_ref()
+            .or(conflict.their.as_ref())
+            .and_then(|e| std::str::from_utf8(&e.path).ok())
+            .unwrap_or("");
+
+        // Only handle rules/ conflicts
+        if !path.starts_with("rules/") || Path::new(path).extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+
+        let ours_blob = conflict
+            .our
+            .as_ref()
+            .and_then(|e| repo.find_blob(e.id).ok());
+        let theirs_blob = conflict
+            .their
+            .as_ref()
+            .and_then(|e| repo.find_blob(e.id).ok());
+
+        let (Some(ours), Some(theirs)) = (ours_blob, theirs_blob) else {
+            continue; // Can't resolve without both sides
+        };
+
+        match merge_rule_json(ours.content(), theirs.content()) {
+            Ok(merged_json) => {
+                let blob_oid = repo.blob(&merged_json)?;
+
+                // Get path bytes from the "our" entry for the resolved IndexEntry
+                let our_entry = conflict.our.as_ref().expect("our entry exists");
+                let path_bytes = our_entry.path.clone();
+
+                // Construct a new IndexEntry (doesn't impl Clone)
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                let index_time = git2::IndexTime::new(
+                    i32::try_from(now.as_secs()).unwrap_or(0),
+                    now.subsec_nanos(),
+                );
+
+                #[allow(clippy::cast_possible_truncation)]
+                let resolved_entry = git2::IndexEntry {
+                    ctime: index_time,
+                    mtime: index_time,
+                    dev: 0,
+                    ino: 0,
+                    mode: 0o100_644, // Regular file
+                    uid: 0,
+                    gid: 0,
+                    file_size: merged_json.len() as u32,
+                    id: blob_oid,
+                    flags: 0, // Stage 0 = resolved
+                    flags_extended: 0,
+                    path: path_bytes,
+                };
+
+                merge_index.conflict_remove(Path::new(path)).map_err(|e| {
+                    TallyError::Git(git2::Error::from_str(&format!(
+                        "Failed to remove conflict for {path}: {e}"
+                    )))
+                })?;
+                merge_index.add(&resolved_entry)?;
+                resolved += 1;
+                tracing::info!(path, "Resolved rule conflict via semantic merge");
+            }
+            Err(e) => {
+                tracing::warn!(path, error = %e, "Failed to merge rule, leaving conflict");
+            }
+        }
+    }
+
+    Ok(resolved)
+}
+
+/// Semantic merge of two rule JSON blobs.
+///
+/// Merge strategy:
+/// - Union arrays (aliases, `cwe_ids`, tags, references, `related_rules`)
+/// - Longest description
+/// - Earliest `created_at`
+/// - Latest `updated_at`
+/// - Max `finding_count`
+/// - Most promoted status (active > experimental > deprecated)
+/// - Take ours for category and scope (warn if differ)
+/// - Null embedding (recompute on next access)
+fn merge_rule_json(ours: &[u8], theirs: &[u8]) -> Result<Vec<u8>> {
+    let mut our_rule: crate::registry::rule::Rule =
+        serde_json::from_slice(ours).map_err(TallyError::Serialization)?;
+    let their_rule: crate::registry::rule::Rule =
+        serde_json::from_slice(theirs).map_err(TallyError::Serialization)?;
+
+    // Longest description
+    if their_rule.description.len() > our_rule.description.len() {
+        our_rule.description = their_rule.description;
+    }
+
+    // Union arrays
+    for alias in &their_rule.aliases {
+        if !our_rule.aliases.contains(alias) {
+            our_rule.aliases.push(alias.clone());
+        }
+    }
+    for cwe in &their_rule.cwe_ids {
+        if !our_rule.cwe_ids.contains(cwe) {
+            our_rule.cwe_ids.push(cwe.clone());
+        }
+    }
+    for tag in &their_rule.tags {
+        if !our_rule.tags.contains(tag) {
+            our_rule.tags.push(tag.clone());
+        }
+    }
+    for reference in &their_rule.references {
+        if !our_rule.references.contains(reference) {
+            our_rule.references.push(reference.clone());
+        }
+    }
+    for related in &their_rule.related_rules {
+        if !our_rule.related_rules.contains(related) {
+            our_rule.related_rules.push(related.clone());
+        }
+    }
+
+    // Earliest created_at
+    if their_rule.created_at < our_rule.created_at {
+        our_rule.created_at = their_rule.created_at;
+        our_rule.created_by = their_rule.created_by;
+    }
+
+    // Latest updated_at
+    if their_rule.updated_at > our_rule.updated_at {
+        our_rule.updated_at = their_rule.updated_at;
+    }
+
+    // Max finding_count
+    our_rule.finding_count = our_rule.finding_count.max(their_rule.finding_count);
+
+    // Most promoted status
+    if their_rule.status.promotion_rank() > our_rule.status.promotion_rank() {
+        our_rule.status = their_rule.status;
+    }
+
+    // Warn if scope differs (take ours)
+    if our_rule.scope.is_some() != their_rule.scope.is_some() {
+        tracing::warn!(
+            rule_id = %our_rule.id,
+            "Rule scope differs between clones — taking local scope"
+        );
+    }
+
+    // Null embedding (recompute on next access)
+    our_rule.embedding = None;
+    our_rule.embedding_model = None;
+
+    serde_json::to_string_pretty(&our_rule)
+        .map(String::into_bytes)
+        .map_err(TallyError::Serialization)
 }

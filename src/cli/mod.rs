@@ -10,6 +10,7 @@ mod note;
 mod query;
 mod rebuild_index;
 mod record;
+pub mod rule; // TODO: refactor to `mod rule` + `pub use rule::handle_*` to match other CLI modules
 mod stats;
 mod suppress;
 mod sync_cmd;
@@ -262,7 +263,11 @@ pub enum Command {
     },
 
     /// Rebuild the index.json from finding files. Use if the index becomes out of sync or after manual edits.
-    RebuildIndex,
+    RebuildIndex {
+        /// Also recalculate finding_count for each rule in the registry.
+        #[arg(long)]
+        include_rules: bool,
+    },
 
     /// Record multiple findings from a JSONL file or stdin. Each line is a JSON object with the same fields as `record`. Partial success — invalid entries don't block valid ones.
     RecordBatch {
@@ -389,6 +394,147 @@ pub enum Command {
 
     /// List available MCP capabilities (tools, resources, prompts) with descriptions and arguments.
     McpCapabilities,
+
+    /// Manage rules in the rule registry.
+    Rule {
+        #[command(subcommand)]
+        action: RuleCommand,
+    },
+}
+
+/// Rule registry subcommands.
+#[derive(Subcommand)]
+pub enum RuleCommand {
+    /// Register a new rule in the registry.
+    Create {
+        /// Rule ID (lowercase alphanumeric with hyphens, 2-64 chars).
+        id: String,
+        /// Human-readable name.
+        #[arg(long)]
+        name: String,
+        /// Description of what this rule checks.
+        #[arg(long)]
+        description: String,
+        /// Domain category (e.g., "safety", "security").
+        #[arg(long)]
+        category: Option<String>,
+        /// Suggested severity for findings.
+        #[arg(long)]
+        severity_hint: Option<String>,
+        /// Alternative names that map to this rule (repeatable).
+        #[arg(long = "alias")]
+        aliases: Vec<String>,
+        /// CWE identifiers (repeatable).
+        #[arg(long = "cwe")]
+        cwe_ids: Vec<String>,
+        /// Scope include patterns (repeatable glob patterns).
+        #[arg(long = "scope-include")]
+        scope_include: Vec<String>,
+        /// Scope exclude patterns (repeatable glob patterns).
+        #[arg(long = "scope-exclude")]
+        scope_exclude: Vec<String>,
+        /// Tags (repeatable).
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+    },
+
+    /// Show full rule details (JSON).
+    Get {
+        /// Rule ID.
+        id: String,
+    },
+
+    /// List all rules with optional filters.
+    List {
+        /// Filter by category.
+        #[arg(long)]
+        category: Option<String>,
+        /// Filter by status (active, deprecated, experimental).
+        #[arg(long)]
+        status: Option<String>,
+        /// Output format.
+        #[arg(long, value_enum, default_value = "table")]
+        format: OutputFormat,
+    },
+
+    /// Search rules by query text.
+    Search {
+        /// Search query (matched against rule IDs, aliases, descriptions).
+        query: String,
+        /// Search method: text (default) or semantic (requires --features semantic-search).
+        #[arg(long, default_value = "text")]
+        method: String,
+        /// Max results (default: 10).
+        #[arg(long, default_value = "10")]
+        limit: usize,
+    },
+
+    /// Reindex rule embeddings for semantic search (requires --features semantic-search).
+    Reindex {
+        /// Compute embeddings for all rules.
+        #[arg(long)]
+        embeddings: bool,
+    },
+
+    /// Update rule fields.
+    Update {
+        /// Rule ID to update.
+        id: String,
+        /// New name.
+        #[arg(long)]
+        name: Option<String>,
+        /// New description.
+        #[arg(long)]
+        description: Option<String>,
+        /// New status (active, deprecated, experimental).
+        #[arg(long)]
+        status: Option<String>,
+        /// Add alias (repeatable).
+        #[arg(long = "add-alias")]
+        add_alias: Vec<String>,
+        /// Remove alias (repeatable).
+        #[arg(long = "remove-alias")]
+        remove_alias: Vec<String>,
+        /// Add CWE ID (repeatable).
+        #[arg(long = "add-cwe")]
+        add_cwe: Vec<String>,
+        /// Replace scope include patterns (repeatable).
+        #[arg(long = "scope-include")]
+        scope_include: Vec<String>,
+        /// Replace scope exclude patterns (repeatable).
+        #[arg(long = "scope-exclude")]
+        scope_exclude: Vec<String>,
+    },
+
+    /// Deprecate a rule (set status to deprecated).
+    Delete {
+        /// Rule ID to deprecate.
+        id: String,
+        /// Reason for deprecation.
+        #[arg(long)]
+        reason: String,
+    },
+
+    /// Add a code example to a rule.
+    AddExample {
+        /// Rule ID.
+        id: String,
+        /// Example type (bad or good).
+        #[arg(long = "type")]
+        example_type: String,
+        /// Programming language.
+        #[arg(long)]
+        language: String,
+        /// Code snippet.
+        #[arg(long)]
+        code: String,
+        /// Explanation.
+        #[arg(long)]
+        explanation: String,
+    },
+
+    /// Migrate existing findings into rule registry.
+    Migrate,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]

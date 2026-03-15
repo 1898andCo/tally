@@ -721,7 +721,7 @@ fn cli_stats_shows_counts() {
             "--title",
             "a",
             "--rule",
-            "r",
+            "r1",
         ])
         .current_dir(tmp.path())
         .assert()
@@ -738,7 +738,7 @@ fn cli_stats_shows_counts() {
             "--title",
             "b",
             "--rule",
-            "s",
+            "s1",
         ])
         .current_dir(tmp.path())
         .assert()

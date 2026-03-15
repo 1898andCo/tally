@@ -17,6 +17,10 @@ allow = [
   "Unicode-3.0",
   "Zlib",
   "CC0-1.0",
+  # Permissive licenses from fastembed transitive deps (semantic-search feature only)
+  "MPL-2.0",             # webpki-roots (Mozilla root certificates)
+  "NCSA",                # LLVM/ONNX runtime components
+  "CDLA-Permissive-2.0", # ONNX model data files
 ]
 
 [bans]

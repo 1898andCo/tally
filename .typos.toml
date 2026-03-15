@@ -1,4 +1,6 @@
 [default.extend-words]
+# Intentional misspelling in registry_model_test.rs:rule_status_from_str_rejects_typo
+actve = "actve"
 jsonl = "jsonl"
 rmcp = "rmcp"
 sarif = "sarif"

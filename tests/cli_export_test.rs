@@ -103,7 +103,7 @@ fn cli_export_to_file() {
             "--title",
             "t",
             "--rule",
-            "r",
+            "r1",
         ])
         .current_dir(tmp.path())
         .assert()

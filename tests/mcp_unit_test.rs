@@ -6,8 +6,9 @@
 use rmcp::handler::server::wrapper::Parameters;
 use tally_ng::mcp::server::{
     AddNoteInput, BatchFindingInput, ExportFindingsInput, GetContextInput, ImportFindingsInput,
-    LocationInput, QueryFindingsInput, RecordBatchInput, RecordFindingInput, SuppressFindingInput,
-    SyncFindingsInput, TagInput, TallyMcpServer, UpdateFindingInput, UpdateStatusInput,
+    LocationInput, QueryFindingsInput, RebuildIndexInput, RecordBatchInput, RecordFindingInput,
+    SuppressFindingInput, SyncFindingsInput, TagInput, TallyMcpServer, UpdateFindingInput,
+    UpdateStatusInput,
 };
 use tally_ng::storage::GitFindingsStore;
 
@@ -454,7 +455,7 @@ async fn mcp_unit_update_valid_transition() {
 
     let record_result = server
         .record_finding(Parameters(make_record_input(
-            "a.rs", 1, "critical", "test", "r",
+            "a.rs", 1, "critical", "test", "r1",
         )))
         .await
         .expect("record");
@@ -486,7 +487,7 @@ async fn mcp_unit_update_invalid_transition() {
 
     let record_result = server
         .record_finding(Parameters(make_record_input(
-            "a.rs", 1, "critical", "test", "r",
+            "a.rs", 1, "critical", "test", "r1",
         )))
         .await
         .expect("record");
@@ -520,7 +521,7 @@ async fn mcp_unit_update_with_short_id() {
 
     server
         .record_finding(Parameters(make_record_input(
-            "a.rs", 1, "critical", "test", "r",
+            "a.rs", 1, "critical", "test", "r1",
         )))
         .await
         .expect("record");
@@ -580,7 +581,7 @@ async fn mcp_unit_get_context_by_uuid() {
             1,
             "critical",
             "test finding",
-            "r",
+            "r1",
         )))
         .await
         .expect("record");
@@ -611,7 +612,7 @@ async fn mcp_unit_get_context_by_short_id() {
             1,
             "important",
             "test",
-            "r",
+            "r1",
         )))
         .await
         .expect("record");
@@ -651,7 +652,7 @@ async fn mcp_unit_suppress() {
 
     let record_result = server
         .record_finding(Parameters(make_record_input(
-            "a.rs", 1, "critical", "test", "r",
+            "a.rs", 1, "critical", "test", "r1",
         )))
         .await
         .expect("record");
@@ -682,7 +683,7 @@ async fn mcp_unit_suppress_with_expiry() {
 
     let record_result = server
         .record_finding(Parameters(make_record_input(
-            "a.rs", 1, "critical", "test", "r",
+            "a.rs", 1, "critical", "test", "r1",
         )))
         .await
         .expect("record");
@@ -714,7 +715,7 @@ async fn mcp_unit_suppress_invalid_date() {
 
     let record_result = server
         .record_finding(Parameters(make_record_input(
-            "a.rs", 1, "critical", "test", "r",
+            "a.rs", 1, "critical", "test", "r1",
         )))
         .await
         .expect("record");
@@ -747,7 +748,7 @@ async fn mcp_unit_suppress_from_invalid_state() {
 
     let record_result = server
         .record_finding(Parameters(make_record_input(
-            "a.rs", 1, "critical", "test", "r",
+            "a.rs", 1, "critical", "test", "r1",
         )))
         .await
         .expect("record");
@@ -1069,7 +1070,7 @@ async fn mcp_unit_resource_detail() {
             1,
             "critical",
             "detailed finding",
-            "r",
+            "r1",
         )))
         .await
         .expect("record");
@@ -1148,7 +1149,7 @@ async fn mcp_unit_resource_by_status() {
 
     let record_result = server
         .record_finding(Parameters(make_record_input(
-            "a.rs", 1, "critical", "test", "r",
+            "a.rs", 1, "critical", "test", "r1",
         )))
         .await
         .expect("record");
@@ -1535,7 +1536,11 @@ async fn mcp_unit_rebuild_index() {
     let (_tmp, server) = setup_mcp();
     record_sample(&server).await;
 
-    let result = server.rebuild_index().await;
+    let result = server
+        .rebuild_index(Parameters(RebuildIndexInput {
+            include_rules: None,
+        }))
+        .await;
     assert!(result.is_ok());
     let text = extract_tool_text(&result.expect("ok"));
     assert!(text.contains("rebuilt"), "should report rebuilt");
@@ -2079,7 +2084,12 @@ async fn mcp_unit_rebuild_index_includes_tags() {
         .expect("add_tag");
 
     // Rebuild index
-    server.rebuild_index().await.expect("rebuild");
+    server
+        .rebuild_index(Parameters(RebuildIndexInput {
+            include_rules: None,
+        }))
+        .await
+        .expect("rebuild");
 
     // Verify tags survived through the rebuild by querying with tag filter
     let result = server
@@ -2396,7 +2406,7 @@ async fn record_finding_with_severity_and_file(
             line_end: None,
             severity: severity.into(),
             title: format!("{severity} finding in {file}"),
-            rule_id: format!("rule-{severity}-{file}"),
+            rule_id: format!("rule-{severity}-{}", file.replace(['/', '.'], "-")),
             description: None,
             tags: None,
             agent: None,
