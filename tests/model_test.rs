@@ -328,6 +328,7 @@ fn finding_serialization_roundtrip() {
         uuid: uuid::Uuid::now_v7(),
         content_fingerprint: "sha256:abc123".to_string(),
         rule_id: "unsafe-unwrap".to_string(),
+        original_rule_id: None,
         locations: vec![Location {
             file_path: "src/main.rs".to_string(),
             line_start: 42,
@@ -400,6 +401,7 @@ fn finding_with_empty_locations() {
         uuid: uuid::Uuid::now_v7(),
         content_fingerprint: "sha256:def456".to_string(),
         rule_id: "missing-test".to_string(),
+        original_rule_id: None,
         locations: vec![],
         severity: Severity::Suggestion,
         category: "coverage".to_string(),
@@ -442,6 +444,7 @@ fn finding_with_all_fields_populated() {
         uuid: uuid::Uuid::now_v7(),
         content_fingerprint: "sha256:all_fields".to_string(),
         rule_id: "sql-injection".to_string(),
+        original_rule_id: None,
         locations: vec![
             Location {
                 file_path: "src/db.rs".to_string(),
@@ -921,6 +924,7 @@ fn make_test_finding() -> Finding {
         uuid: uuid::Uuid::now_v7(),
         content_fingerprint: "sha256:test".to_string(),
         rule_id: "spec-drift".to_string(),
+        original_rule_id: None,
         locations: vec![Location {
             file_path: "src/main.rs".to_string(),
             line_start: 42,

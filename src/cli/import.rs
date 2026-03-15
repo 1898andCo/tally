@@ -135,6 +135,7 @@ fn import_single_finding(entry: &serde_json::Value, store: &GitFindingsStore) ->
         uuid: new_uuid,
         content_fingerprint: fingerprint,
         rule_id,
+        original_rule_id: None,
         locations: vec![location],
         severity,
         category,

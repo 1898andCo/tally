@@ -38,6 +38,7 @@ fn make_test_finding(uuid: Uuid) -> Finding {
         uuid,
         content_fingerprint: format!("sha256:test_{uuid}"),
         rule_id: "test-rule".to_string(),
+        original_rule_id: None,
         locations: vec![Location {
             file_path: "src/main.rs".to_string(),
             line_start: 42,

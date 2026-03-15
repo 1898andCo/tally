@@ -173,6 +173,7 @@ fn create_finding(
         uuid: new_uuid,
         content_fingerprint: fingerprint,
         rule_id: args.rule.to_string(),
+        original_rule_id: None,
         locations,
         severity,
         category: args.category.to_string(),

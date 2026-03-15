@@ -42,6 +42,10 @@ pub struct Finding {
     /// Enables "show all instances of this rule" queries.
     #[serde(default)]
     pub rule_id: String,
+    /// Original rule ID as provided by the agent (before normalization/alias resolution).
+    /// Set only when normalization changed the ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_rule_id: Option<String>,
 
     // --- Locations (multi-file supported) ---
     /// Primary location + optional secondary locations (cross-file findings).

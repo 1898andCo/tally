@@ -10,6 +10,7 @@ fn make_finding() -> Finding {
         uuid: uuid::Uuid::now_v7(),
         content_fingerprint: "sha256:prop".to_string(),
         rule_id: "test-rule".to_string(),
+        original_rule_id: None,
         locations: vec![Location {
             file_path: "src/lib.rs".to_string(),
             line_start: 1,

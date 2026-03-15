@@ -582,36 +582,46 @@ impl GitFindingsStore {
     /// Upsert a file on the findings branch and commit.
     ///
     /// Uses `TreeUpdateBuilder` for multi-level path handling and
-    /// retries on ref lock contention (libgit2 doesn't retry automatically).
+    /// retries on ref lock contention or compare-and-swap failure
+    /// (libgit2 doesn't retry automatically).
     fn upsert_file(&self, file_path: &str, content: &[u8], message: &str) -> Result<()> {
         let blob_oid = self.repo.blob(content)?;
-
-        let commit = self.branch_tip()?;
-        let parent_tree = commit.tree()?;
-
-        let mut builder = git2::build::TreeUpdateBuilder::new();
-        builder.upsert(file_path, blob_oid, FileMode::Blob);
-        let new_tree_oid = builder.create_updated(&self.repo, &parent_tree)?;
-        let new_tree = self.repo.find_tree(new_tree_oid)?;
-
         let sig = self.signature()?;
         let ref_name = format!("refs/heads/{}", self.branch_name);
 
-        // Retry on ref lock contention
+        // Retry on ref lock contention or compare-and-swap (Modified) failure.
+        // Blob creation + tree building are INSIDE the loop so they use the
+        // fresh parent tree on Modified retries.
         for attempt in 0..MAX_LOCK_RETRIES {
+            let commit = self.branch_tip()?;
+            let parent_tree = commit.tree()?;
+
+            let mut builder = git2::build::TreeUpdateBuilder::new();
+            builder.upsert(file_path, blob_oid, FileMode::Blob);
+            let new_tree_oid = builder.create_updated(&self.repo, &parent_tree)?;
+            let new_tree = self.repo.find_tree(new_tree_oid)?;
+
             match self
                 .repo
                 .commit(Some(&ref_name), &sig, &sig, message, &new_tree, &[&commit])
             {
                 Ok(_) => return Ok(()),
-                Err(e) if e.code() == ErrorCode::Locked && attempt < MAX_LOCK_RETRIES - 1 => {
+                Err(e)
+                    if (e.code() == ErrorCode::Locked || e.code() == ErrorCode::Modified)
+                        && attempt < MAX_LOCK_RETRIES - 1 =>
+                {
+                    let reason = if e.code() == ErrorCode::Modified {
+                        "Ref modified (compare-and-swap), retrying"
+                    } else {
+                        "Ref lock contention, retrying"
+                    };
                     let delay = Duration::from_millis(100 * u64::from(2_u32.pow(attempt)));
                     tracing::warn!(
                         branch = %self.branch_name,
                         attempt = attempt + 1,
                         max = MAX_LOCK_RETRIES,
                         delay_ms = delay.as_millis(),
-                        "Ref lock contention, retrying"
+                        reason,
                     );
                     thread::sleep(delay);
                 }
@@ -620,6 +630,77 @@ impl GitFindingsStore {
         }
 
         unreachable!("retry loop should have returned")
+    }
+
+    /// Remove a file from the findings branch and commit.
+    fn remove_file(&self, file_path: &str, message: &str) -> Result<()> {
+        let sig = self.signature()?;
+        let ref_name = format!("refs/heads/{}", self.branch_name);
+
+        for attempt in 0..MAX_LOCK_RETRIES {
+            let commit = self.branch_tip()?;
+            let parent_tree = commit.tree()?;
+
+            let mut builder = git2::build::TreeUpdateBuilder::new();
+            builder.remove(file_path);
+            let new_tree_oid = builder.create_updated(&self.repo, &parent_tree)?;
+            let new_tree = self.repo.find_tree(new_tree_oid)?;
+
+            match self
+                .repo
+                .commit(Some(&ref_name), &sig, &sig, message, &new_tree, &[&commit])
+            {
+                Ok(_) => return Ok(()),
+                Err(e)
+                    if (e.code() == ErrorCode::Locked || e.code() == ErrorCode::Modified)
+                        && attempt < MAX_LOCK_RETRIES - 1 =>
+                {
+                    let delay = Duration::from_millis(100 * u64::from(2_u32.pow(attempt)));
+                    thread::sleep(delay);
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        unreachable!("retry loop should have returned")
+    }
+
+    // --- Public wrappers for registry/store use ---
+
+    /// Public wrapper for `upsert_file`. Used by the rule registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TallyError::Git` if git operations fail.
+    pub fn upsert_file_pub(&self, file_path: &str, content: &[u8], message: &str) -> Result<()> {
+        self.upsert_file(file_path, content, message)
+    }
+
+    /// Public wrapper for `read_file`. Used by the rule registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TallyError::Git` if the file doesn't exist or git fails.
+    pub fn read_file_pub(&self, file_path: &str) -> Result<Vec<u8>> {
+        self.read_file(file_path)
+    }
+
+    /// Public wrapper for `list_directory`. Used by the rule registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TallyError::Git` if the directory doesn't exist or git fails.
+    pub fn list_directory_pub(&self, dir_path: &str) -> Result<Vec<String>> {
+        self.list_directory(dir_path)
+    }
+
+    /// Public wrapper for `remove_file`. Used by the rule registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TallyError::Git` if git operations fail.
+    pub fn remove_file_pub(&self, file_path: &str, message: &str) -> Result<()> {
+        self.remove_file(file_path, message)
     }
 
     /// Create a git signature for commits.
