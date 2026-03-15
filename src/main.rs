@@ -178,7 +178,9 @@ fn run(cli: Cli) -> tally_ng::error::Result<()> {
             &suppression_type,
             suppression_pattern.as_deref(),
         ),
-        Command::RebuildIndex => cli::handle_rebuild_index(&store()?),
+        Command::RebuildIndex { include_rules } => {
+            cli::handle_rebuild_index(&store()?, include_rules)
+        }
         Command::RecordBatch { input, agent } => {
             cli::handle_record_batch(&store()?, &input, &agent)
         }

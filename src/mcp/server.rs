@@ -429,6 +429,14 @@ pub struct MigrateRulesInput {
     pub dry_run: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RebuildIndexInput {
+    #[schemars(
+        description = "Also recalculate finding_count for each rule in the registry. Default: false"
+    )]
+    pub include_rules: Option<bool>,
+}
+
 // --- Output Type ---
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1152,16 +1160,31 @@ impl TallyMcpServer {
     }
 
     #[tool(
-        description = "Rebuild the index.json from finding files on the findings-data branch. Use this if the index becomes out of sync, or after manual edits to finding files."
+        description = "Rebuild the index.json from finding files on the findings-data branch. Optionally recalculate rule finding_count with include_rules=true."
     )]
-    pub async fn rebuild_index(&self) -> Result<CallToolResult, McpError> {
+    pub async fn rebuild_index(
+        &self,
+        params: Parameters<RebuildIndexInput>,
+    ) -> Result<CallToolResult, McpError> {
         let store = self.store()?;
         store.rebuild_index().map_err(to_mcp_err)?;
+
+        let include_rules = params.0.include_rules.unwrap_or(false);
+        if include_rules {
+            store.rebuild_rule_counts().map_err(to_mcp_err)?;
+        }
+
+        let message = if include_rules {
+            "index.json and rule finding_counts rebuilt"
+        } else {
+            "index.json rebuilt from finding files"
+        };
+
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&ToolOutput {
                 status: "rebuilt".into(),
                 uuid: None,
-                message: Some("index.json rebuilt from finding files".into()),
+                message: Some(message.into()),
                 related_to: None,
                 distance: None,
                 expires_at: None,

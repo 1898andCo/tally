@@ -6,8 +6,9 @@
 use rmcp::handler::server::wrapper::Parameters;
 use tally_ng::mcp::server::{
     AddNoteInput, BatchFindingInput, ExportFindingsInput, GetContextInput, ImportFindingsInput,
-    LocationInput, QueryFindingsInput, RecordBatchInput, RecordFindingInput, SuppressFindingInput,
-    SyncFindingsInput, TagInput, TallyMcpServer, UpdateFindingInput, UpdateStatusInput,
+    LocationInput, QueryFindingsInput, RebuildIndexInput, RecordBatchInput, RecordFindingInput,
+    SuppressFindingInput, SyncFindingsInput, TagInput, TallyMcpServer, UpdateFindingInput,
+    UpdateStatusInput,
 };
 use tally_ng::storage::GitFindingsStore;
 
@@ -1535,7 +1536,11 @@ async fn mcp_unit_rebuild_index() {
     let (_tmp, server) = setup_mcp();
     record_sample(&server).await;
 
-    let result = server.rebuild_index().await;
+    let result = server
+        .rebuild_index(Parameters(RebuildIndexInput {
+            include_rules: None,
+        }))
+        .await;
     assert!(result.is_ok());
     let text = extract_tool_text(&result.expect("ok"));
     assert!(text.contains("rebuilt"), "should report rebuilt");
@@ -2079,7 +2084,12 @@ async fn mcp_unit_rebuild_index_includes_tags() {
         .expect("add_tag");
 
     // Rebuild index
-    server.rebuild_index().await.expect("rebuild");
+    server
+        .rebuild_index(Parameters(RebuildIndexInput {
+            include_rules: None,
+        }))
+        .await
+        .expect("rebuild");
 
     // Verify tags survived through the rebuild by querying with tag filter
     let result = server

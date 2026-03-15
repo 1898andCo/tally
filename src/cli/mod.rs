@@ -263,7 +263,11 @@ pub enum Command {
     },
 
     /// Rebuild the index.json from finding files. Use if the index becomes out of sync or after manual edits.
-    RebuildIndex,
+    RebuildIndex {
+        /// Also recalculate finding_count for each rule in the registry.
+        #[arg(long)]
+        include_rules: bool,
+    },
 
     /// Record multiple findings from a JSONL file or stdin. Each line is a JSON object with the same fields as `record`. Partial success — invalid entries don't block valid ones.
     RecordBatch {

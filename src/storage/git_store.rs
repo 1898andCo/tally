@@ -181,6 +181,8 @@ impl GitFindingsStore {
     pub fn init(&self) -> Result<()> {
         // Check if branch already exists
         if self.branch_exists() {
+            // Upgrade path: ensure rules/ directory exists on existing branches
+            self.ensure_rules_dir()?;
             return Ok(());
         }
 
@@ -209,6 +211,7 @@ impl GitFindingsStore {
             gitkeep_blob,
             FileMode::Blob,
         );
+        builder.upsert("rules/.gitkeep", gitkeep_blob, FileMode::Blob);
         builder.upsert("schema.json", schema_blob, FileMode::Blob);
         builder.upsert(".gitattributes", gitattributes_blob, FileMode::Blob);
 
@@ -540,7 +543,75 @@ impl GitFindingsStore {
         unreachable!("retry loop should have returned")
     }
 
+    /// Rebuild rule `finding_count` fields by scanning all findings.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if git operations fail.
+    pub fn rebuild_rule_counts(&self) -> Result<()> {
+        let findings = self.load_all()?;
+        let Ok(rules) = self.list_directory_pub("rules") else {
+            return Ok(()); // No rules directory
+        };
+
+        let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for finding in &findings {
+            *counts.entry(finding.rule_id.clone()).or_default() += 1;
+        }
+
+        for name in &rules {
+            if name == ".gitkeep"
+                || std::path::Path::new(name)
+                    .extension()
+                    .is_none_or(|ext| ext != "json")
+            {
+                continue;
+            }
+
+            let file_path = format!("rules/{name}");
+            let Ok(content) = self.read_file(&file_path) else {
+                continue;
+            };
+            let Ok(mut rule) = serde_json::from_slice::<crate::registry::rule::Rule>(&content)
+            else {
+                continue;
+            };
+
+            let actual_count = counts.get(&rule.id).copied().unwrap_or(0);
+            if rule.finding_count != actual_count {
+                rule.finding_count = actual_count;
+                let json =
+                    serde_json::to_string_pretty(&rule).map_err(TallyError::Serialization)?;
+                self.upsert_file(
+                    &file_path,
+                    json.as_bytes(),
+                    &format!("Rebuild rule count: {}", rule.id),
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
     // --- Private helpers ---
+
+    /// Ensure the `rules/` directory exists on the findings-data branch.
+    /// For upgrading pre-1.2 repos that don't have it yet.
+    fn ensure_rules_dir(&self) -> Result<()> {
+        // Check if rules/.gitkeep already exists
+        if self.read_file("rules/.gitkeep").is_ok() {
+            return Ok(());
+        }
+
+        // Add rules/.gitkeep
+        self.upsert_file(
+            "rules/.gitkeep",
+            b"",
+            "Add rules directory for rule registry",
+        )?;
+        tracing::info!("Upgraded findings-data branch: added rules/ directory");
+        Ok(())
+    }
 
     /// Get the branch tip commit.
     fn branch_tip(&self) -> Result<git2::Commit<'_>> {
