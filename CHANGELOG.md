@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.2] - 2026-03-16
+
+### Bug Fixes
+
+- *(release)* Add Windows semantic-search binary to release
+- *(release)* Use prebuilt binaries in Homebrew formulas
+
 ## [0.7.1] - 2026-03-15
 
 ### Features
