@@ -37,7 +37,7 @@ jobs:
           fi
 
       - name: Generate changelog
-        uses: orhun/git-cliff-action@v4
+        uses: orhun/git-cliff-action@c93ef52f3d0ddcdcc9bd5447d98d458a11cd4f72 # v4
         with:
           config: cliff.toml
           args: --latest --strip header
@@ -46,7 +46,7 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
           body_path: CHANGELOG.md
           draft: false
@@ -121,7 +121,7 @@ jobs:
           echo "ARCHIVE=${archive}" >> $env:GITHUB_ENV
 
       - name: Upload to Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
           files: |
             ${{ env.ARCHIVE }}
@@ -192,7 +192,7 @@ jobs:
           echo "ARCHIVE=${archive}" >> $env:GITHUB_ENV
 
       - name: Upload to Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
           files: |
             ${{ env.ARCHIVE }}
