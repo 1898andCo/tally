@@ -2912,7 +2912,7 @@ pub fn read_resource_summary(store: &GitFindingsStore) -> Result<String, McpErro
 
     // 10 most recent findings
     let mut recent = findings;
-    recent.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    recent.sort_by_key(|b| std::cmp::Reverse(b.created_at));
     recent.truncate(10);
 
     let recent_summaries: Vec<serde_json::Value> = recent
@@ -3065,10 +3065,8 @@ pub fn read_resource_by_pr(store: &GitFindingsStore, pr_str: &str) -> Result<Str
 ///
 /// Returns `McpError` if storage fails.
 pub fn read_resource_version(store: &GitFindingsStore) -> Result<String, McpError> {
-    let rule_count = crate::registry::store::RuleStore::load_all_rules(store)
-        .map(|r| r.len())
-        .unwrap_or(0);
-    let finding_count = store.load_all().map(|f| f.len()).unwrap_or(0);
+    let rule_count = crate::registry::store::RuleStore::load_all_rules(store).map_or(0, |r| r.len());
+    let finding_count = store.load_all().map_or(0, |f| f.len());
 
     let version_info = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -3122,7 +3120,7 @@ pub fn read_resource_rules_summary(store: &GitFindingsStore) -> Result<String, M
         .iter()
         .map(|r| (r.id.as_str(), *finding_counts.get(&r.id).unwrap_or(&0)))
         .collect();
-    rule_usage.sort_by(|a, b| b.1.cmp(&a.1));
+    rule_usage.sort_by_key(|b| std::cmp::Reverse(b.1));
     let top_rules: Vec<serde_json::Value> = rule_usage
         .iter()
         .take(10)
