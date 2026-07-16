@@ -54,10 +54,13 @@ jobs:
     runs-on: [build-sandbox, Common, X64]
     timeout-minutes: 1
     steps:
-      - name: Harden the runner (Audit all outbound calls)
+      - name: Harden the runner (Block egress)
         uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
 
       - run: echo "Skipped — doc-only change"
 
@@ -68,10 +71,13 @@ jobs:
     runs-on: [build-sandbox, Common, X64]
     timeout-minutes: 1
     steps:
-      - name: Harden the runner (Audit all outbound calls)
+      - name: Harden the runner (Block egress)
         uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
 
       - run: echo "Skipped — doc-only change"
 
@@ -82,10 +88,13 @@ jobs:
     runs-on: [build-sandbox, Common, X64]
     timeout-minutes: 1
     steps:
-      - name: Harden the runner (Audit all outbound calls)
+      - name: Harden the runner (Block egress)
         uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
 
       - run: echo "Skipped — doc-only change"
 
@@ -96,10 +105,13 @@ jobs:
     runs-on: [build-sandbox, Common, X64]
     timeout-minutes: 1
     steps:
-      - name: Harden the runner (Audit all outbound calls)
+      - name: Harden the runner (Block egress)
         uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
 
       - run: echo "Skipped — doc-only change"
 
@@ -110,9 +122,12 @@ jobs:
     runs-on: [build-sandbox, Common, X64]
     timeout-minutes: 1
     steps:
-      - name: Harden the runner (Audit all outbound calls)
+      - name: Harden the runner (Block egress)
         uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
 
       - run: echo "Skipped — doc-only change"
