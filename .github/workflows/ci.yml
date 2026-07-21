@@ -33,7 +33,7 @@ env:
 jobs:
   check-fmt:
     name: Rustfmt
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Harden the runner (Block egress)
@@ -61,7 +61,7 @@ jobs:
 
   check-clippy:
     name: Clippy
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Harden the runner (Block egress)
@@ -89,7 +89,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Harden the runner (Block egress)
@@ -116,7 +116,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Harden the runner (Block egress)
@@ -144,7 +144,7 @@ jobs:
 
   test-semantic:
     name: Test (semantic-search)
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     if: >
       github.event_name == 'workflow_dispatch' ||
@@ -180,7 +180,7 @@ jobs:
 
   deny:
     name: Cargo Deny
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Harden the runner (Block egress)

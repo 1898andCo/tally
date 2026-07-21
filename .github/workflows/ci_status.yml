@@ -16,7 +16,7 @@ permissions:
 jobs:
   detect:
     name: Detect Changes
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       doc_only: ${{ steps.check.outputs.doc_only }}
@@ -51,7 +51,7 @@ jobs:
     name: Rustfmt
     needs: detect
     if: needs.detect.outputs.doc_only == 'true'
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - name: Harden the runner (Block egress)
@@ -68,7 +68,7 @@ jobs:
     name: Clippy
     needs: detect
     if: needs.detect.outputs.doc_only == 'true'
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - name: Harden the runner (Block egress)
@@ -85,7 +85,7 @@ jobs:
     name: Build
     needs: detect
     if: needs.detect.outputs.doc_only == 'true'
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - name: Harden the runner (Block egress)
@@ -102,7 +102,7 @@ jobs:
     name: Test
     needs: detect
     if: needs.detect.outputs.doc_only == 'true'
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - name: Harden the runner (Block egress)
@@ -119,7 +119,7 @@ jobs:
     name: Cargo Deny
     needs: detect
     if: needs.detect.outputs.doc_only == 'true'
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - name: Harden the runner (Block egress)

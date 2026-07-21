@@ -15,7 +15,7 @@ env:
 jobs:
   create-release:
     name: Create Release
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
@@ -248,7 +248,7 @@ jobs:
   publish-crate:
     name: Publish to crates.io
     needs: [create-release, build-binaries]
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     if: ${{ !contains(needs.create-release.outputs.tag, '-') }}
     steps:
       - name: Harden the runner (Block egress)
@@ -284,7 +284,7 @@ jobs:
   update-homebrew:
     name: Update Homebrew Formula
     needs: [create-release, build-binaries]
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     if: ${{ !contains(needs.create-release.outputs.tag, '-') }}
     steps:
       - name: Harden the runner (Block egress)
@@ -367,7 +367,7 @@ jobs:
   update-homebrew-semantic:
     name: Update Homebrew Semantic Formula
     needs: [create-release, build-semantic-binaries]
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     if: ${{ !contains(needs.create-release.outputs.tag, '-') }}
     steps:
       - name: Harden the runner (Block egress)
@@ -452,7 +452,7 @@ jobs:
   sync-main:
     name: Sync main branch
     needs: [create-release, build-binaries]
-    runs-on: [build-sandbox, Common, X64]
+    runs-on: ubuntu-latest
     if: ${{ !contains(needs.create-release.outputs.tag, '-') }}
     steps:
       - name: Harden the runner (Block egress)
