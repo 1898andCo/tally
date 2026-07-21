@@ -53,8 +53,12 @@ fn build_remote_callbacks() -> git2::RemoteCallbacks<'static> {
         // macOS osxkeychain, Windows GCM, Linux store/cache, gh auth setup-git)
         if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
             if let Ok(config) = git2::Config::open_default() {
-                if let Ok(cred) = git2::Cred::credential_helper(&config, url, username_from_url) {
-                    return Ok(cred);
+                let mut helper = git2::CredentialHelper::new(url);
+                helper.config(&config);
+                if let Some((u, p)) = helper.execute() {
+                    if let Ok(cred) = git2::Cred::userpass_plaintext(&u, &p) {
+                        return Ok(cred);
+                    }
                 }
             }
 
@@ -369,14 +373,14 @@ impl GitFindingsStore {
             .repo
             .find_remote("origin")
             .ok()
-            .and_then(|r| r.url().map(String::from))
+            .and_then(|r| r.url().ok().map(String::from))
             .unwrap_or_default();
 
         let branch = self
             .repo
             .head()
             .ok()
-            .and_then(|h| h.shorthand().map(String::from));
+            .and_then(|h| h.shorthand().ok().map(String::from));
 
         let commit_sha = self
             .repo
@@ -659,7 +663,7 @@ impl GitFindingsStore {
 
         let mut entries = Vec::new();
         for entry in &dir_tree {
-            if let Some(name) = entry.name() {
+            if let Ok(name) = entry.name() {
                 entries.push(name.to_string());
             }
         }

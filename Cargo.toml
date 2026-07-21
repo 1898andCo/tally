@@ -18,7 +18,7 @@ chumsky = "0.10"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 comfy-table = "7"
-git2 = "0.20"
+git2 = { version = "0.21", features = ["cred"] }
 globset = "0.4"
 hex = "0.4"
 home = "0.5"
