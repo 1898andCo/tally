@@ -34,7 +34,7 @@ env:
 jobs:
   coverage:
     name: Code Coverage
-    runs-on: [build-deploy, Common, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Harden the runner (Block egress)
