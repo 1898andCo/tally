@@ -63,7 +63,7 @@ pub fn handle_stats(store: &GitFindingsStore) -> Result<()> {
         println!();
         println!("  Top tags:");
         let mut sorted: Vec<_> = tag_counts.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.sort_by_key(|a| std::cmp::Reverse(a.1));
         for (tag, count) in sorted.into_iter().take(5) {
             println!("    {tag:<30} {count}");
         }
