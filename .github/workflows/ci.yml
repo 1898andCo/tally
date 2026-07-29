@@ -41,6 +41,7 @@ jobs:
         with:
           egress-policy: block
           allowed-endpoints: >
+            cdn.pyke.io:443
             github.com:443
             index.crates.io:443
             static.crates.io:443
@@ -69,6 +70,7 @@ jobs:
         with:
           egress-policy: block
           allowed-endpoints: >
+            cdn.pyke.io:443
             github.com:443
             index.crates.io:443
             static.crates.io:443
@@ -97,6 +99,7 @@ jobs:
         with:
           egress-policy: block
           allowed-endpoints: >
+            cdn.pyke.io:443
             github.com:443
             index.crates.io:443
             static.crates.io:443
@@ -124,6 +127,7 @@ jobs:
         with:
           egress-policy: block
           allowed-endpoints: >
+            cdn.pyke.io:443
             github.com:443
             index.crates.io:443
             static.crates.io:443
@@ -155,6 +159,7 @@ jobs:
         with:
           egress-policy: block
           allowed-endpoints: >
+            cdn.pyke.io:443
             github.com:443
             huggingface.co:443
             index.crates.io:443
@@ -188,6 +193,7 @@ jobs:
         with:
           egress-policy: block
           allowed-endpoints: >
+            cdn.pyke.io:443
             github.com:443
             index.crates.io:443
             static.crates.io:443
